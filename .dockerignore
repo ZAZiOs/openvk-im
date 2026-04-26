@@ -1,0 +1,7 @@
+.git
+vendor
+tmp
+bin
+*.log
+.env
+Dockerfile
