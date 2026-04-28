@@ -4,6 +4,7 @@ import (
 	"net/http"
 	dbx "ovk-im/src/db"
 	db_models "ovk-im/src/models/db"
+	lp_models "ovk-im/src/models/longpoll"
 	"ovk-im/src/repo/chat"
 	"strconv"
 	"time"
@@ -133,9 +134,42 @@ func (r *Router) MessagesSend(c *gin.Context) {
 		return
 	}
 
+	lpEvent := lp_models.NewMessageEvent{
+		MessageID:   finalLocalID,
+		Flags:       lp_models.MessageFlags{Value: 0},
+		PeerID:      peerID,
+		Timestamp:   int(time.Now().Unix()),
+		Text:        message,
+		Attachments: make(map[string]interface{}),
+	}
+
+	var recipients []int64
+	if peerID > 2000000000 {
+		dbx.Instance.Model(&db_models.ConversationMember{}).
+			Where("peer_id = ?", peerID).
+			Pluck("user_id", &recipients)
+	} else {
+		recipients = append(recipients, currentUserID)
+		if peerID != currentUserID {
+			recipients = append(recipients, peerID)
+		}
+	}
+
+	for _, uid := range recipients {
+		userEvent := lpEvent
+		if uid == currentUserID {
+			userEvent.Flags.Add(lp_models.FlagOutbox)
+		} else {
+			userEvent.Flags.Add(lp_models.FlagUnread)
+		}
+
+		_, _, err := r.LPRepo.PushEvent(c.Request.Context(), uid, "msg_new", userEvent)
+		if err == nil {
+			r.Broadcaster.Notify(uid)
+		}
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"response": finalLocalID,
 	})
-	// Добавить longpoll event что пришло сообщение.
-
 }
