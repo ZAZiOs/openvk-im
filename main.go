@@ -1,9 +1,12 @@
 package main
 
 import (
+	"context"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"github.com/gin-gonic/gin"
@@ -12,15 +15,21 @@ import (
 	env "ovk-im/src/config"
 	"ovk-im/src/db"
 	"ovk-im/src/redis"
-	"ovk-im/src/transport/redis_listener"
+	redisrepo "ovk-im/src/repo/redis"
+	"ovk-im/src/transport/broadcaster"
+	"ovk-im/src/transport/endpoints"
+	lp_trans "ovk-im/src/transport/longpoll"
 )
 
 func main() {
+	log.Println("Starting OpenVK-IM server...")
+
 	if err := godotenv.Load(); err != nil {
 		log.Println("No .env file found")
 	}
 
 	secret := env.Get("SECRET_KEY", "aaa")
+
 	if len(secret) < 64 {
 		log.Println("SECRET_KEY .env variable is less than 64 bytes")
 		return
@@ -29,37 +38,62 @@ func main() {
 	db.Connect()
 	redis.Init()
 
+	lpBroadcaster := broadcaster.New()
+	lpRepo := redisrepo.NewRepo(redis.Client)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				log.Fatalf("Redis Listener panicked: %v", r)
-			}
-		}()
-		redis_listener.Start()
+		pubsub := redis.Client.Subscribe(ctx, "lp_updates")
+		defer pubsub.Close()
+
+		for msg := range pubsub.Channel() {
+			userID, _ := strconv.ParseInt(msg.Payload, 10, 64)
+			lpBroadcaster.Notify(userID)
+		}
 	}()
 
 	if !env.IsDev() {
 		gin.SetMode(gin.ReleaseMode)
 	}
-
 	r := gin.Default()
 
-	r.GET("/ping", func(c *gin.Context) {
-		c.JSON(200, gin.H{"status": "ok"})
+	r.GET("/nim", func(c *gin.Context) {
+		lp_trans.LongPollHandler(c.Writer, c.Request, lpBroadcaster, lpRepo)
 	})
 
+	endpointRouter := &endpoints.Router{
+		DB:          db.Instance,
+		LPRepo:      lpRepo,
+		Broadcaster: lpBroadcaster,
+	}
+	internal := r.Group("/method")
+	{
+		endpointRouter.Register(internal)
+	}
+
 	port := env.Get("APP_PORT", "8080")
+	srv := &http.Server{
+		Addr:    ":" + port,
+		Handler: r,
+	}
 
-	log.Printf("OpenVK-IM started on port %s", port)
-	r.Run(":" + port)
+	go func() {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("listen: %s\n", err)
+		}
+	}()
 
-	// Server stop
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	log.Printf("Server started on port %s", port)
 
-	<-stop
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	<-quit
+
+	log.Println("Shutting down server...")
 
 	sqlDB, _ := db.Instance.DB()
 	sqlDB.Close()
-
+	redis.Client.Close()
 }

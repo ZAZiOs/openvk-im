@@ -1,42 +1,48 @@
 package broadcaster
 
-import (
-	"sync"
-)
+import "sync"
 
-var (
-	subscribers = make(map[int64][]chan struct{})
+type Broadcaster struct {
 	mu          sync.RWMutex
-)
-
-func Subscribe(userID int64, ch chan struct{}) {
-	mu.Lock()
-	defer mu.Unlock()
-	subscribers[userID] = append(subscribers[userID], ch)
+	subscribers map[int64][]chan struct{}
 }
 
-func Unsubscribe(userID int64, ch chan struct{}) {
-	mu.Lock()
-	defer mu.Unlock()
-	subs := subscribers[userID]
-	for i, v := range subs {
-		if v == ch {
-			subscribers[userID] = append(subs[:i], subs[i+1:]...)
+func New() *Broadcaster {
+	return &Broadcaster{
+		subscribers: make(map[int64][]chan struct{}),
+	}
+}
+
+func (b *Broadcaster) Subscribe(userID int64) chan struct{} {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	ch := make(chan struct{}, 1)
+	b.subscribers[userID] = append(b.subscribers[userID], ch)
+	return ch
+}
+
+func (b *Broadcaster) Unsubscribe(userID int64, ch chan struct{}) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	subs := b.subscribers[userID]
+	for i, s := range subs {
+		if s == ch {
+			b.subscribers[userID] = append(subs[:i], subs[i+1:]...)
 			break
 		}
 	}
 }
 
-func NotifyUser(userID int64) {
-	mu.RLock()
-	defer mu.RUnlock()
+func (b *Broadcaster) Notify(userID int64) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
 
-	if channels, ok := subscribers[userID]; ok {
-		for _, ch := range channels {
-			select {
-			case ch <- struct{}{}:
-			default:
-			}
+	for _, ch := range b.subscribers[userID] {
+		select {
+		case ch <- struct{}{}:
+		default:
 		}
 	}
 }

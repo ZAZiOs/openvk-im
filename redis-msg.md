@@ -1,35 +1,22 @@
 ## Message operations
 
-### send_msg:
+### Отправка сообщения
 
 ```json
 {
   "action": "msg.send",
   "data": {
-    "chat_id": 1,
+    "peer_id": 2000000001,
     "from_id": 1,
-    "msg_type": 1,      // 0: system, 1: text
     "text": "Привет!",
-    "attachments": [         // Готовый JSON-массив для хранения в БД
-      {"type": "photo", "id": 123},
-      {"type": "doc", "id": 456}
-    ],
-    "reply_to": 0
-  }
-}
-```
-system msg:
-```json
-{
-  "action": "msg.send",
-  "data": {
-    "chat_id": 1,
-    "from_id": 1,
-    "msg_type": 0,
-    "text": "chat_user_kick",
-    "attachments": [
-      {"type": "audiomsg", "id": 123}
-    ],
+    "attachments": {
+      "attach1_type": "photo",
+      "attach1": "{owner_id}_{item_id}",
+      "fwd": "{$user_id}_{$msg_id}{$user_id}_{$msg2_id}",
+      "geo": "geo_id",
+      "attach2_product_id": "sticker_id",
+      "emoji": 1
+    },
     "reply_to": 0
   }
 }
@@ -39,7 +26,7 @@ system msg:
 
 ```json
 {
-  "action": "edit_msg",
+  "action": "msg.edit",
   "data": {
     "msg_id": 505,
     "chat_id": 2000000001,

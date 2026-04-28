@@ -1,41 +1,43 @@
 package db_models
 
 import (
-	"context"
+	"database/sql/driver"
+	"encoding/json"
 	"fmt"
 	"ovk-im/src/crypto"
-
-	"gorm.io/gorm"
-	"gorm.io/gorm/schema"
 )
 
-type EncryptedJSON string
+type EncryptedJSON []byte
 
-func (ej *EncryptedJSON) Scan(ctx context.Context, instance *gorm.DB, field *schema.Field, dbValue interface{}) error {
-	if dbValue == nil {
-		return nil
-	}
-
-	encryptedStr := fmt.Sprint(dbValue)
-
-	decrypted, err := crypto.Decrypt(encryptedStr)
-	if err != nil {
-		return err
-	}
-
-	*ej = EncryptedJSON(decrypted)
-	return nil
-}
-
-func (ej EncryptedJSON) Value(ctx context.Context, instance *gorm.DB, field *schema.Field, fieldValue interface{}) (interface{}, error) {
+func (ej EncryptedJSON) Value() (driver.Value, error) {
 	if len(ej) == 0 {
 		return nil, nil
 	}
-
 	encrypted, err := crypto.Encrypt(string(ej))
 	if err != nil {
 		return nil, err
 	}
-
 	return encrypted, nil
+}
+
+func (ej *EncryptedJSON) Scan(value interface{}) error {
+	if value == nil {
+		*ej = nil
+		return nil
+	}
+	s, ok := value.([]byte)
+	if !ok {
+		return fmt.Errorf("invalid data type for EncryptedJSON")
+	}
+
+	decrypted, err := crypto.Decrypt(string(s))
+	if err != nil {
+		return err
+	}
+	*ej = []byte(decrypted)
+	return nil
+}
+
+func (ej EncryptedJSON) Unmarshal(v interface{}) error {
+	return json.Unmarshal(ej, v)
 }

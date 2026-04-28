@@ -54,6 +54,7 @@ func Connect() {
 		&dbm.Message{},
 		&dbm.ConversationMember{},
 		&dbm.ChatInvite{},
+		&dbm.ImState{},
 	)
 
 	if err != nil {
