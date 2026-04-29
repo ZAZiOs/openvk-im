@@ -51,5 +51,5 @@
 * **messages.isMessagesFromGroupAllowed** — проверка, разрешены ли сообщения от группы.
 
 ### Long Poll (обновления в реальном времени) "longpoll"
-* **messages.getLongPollServer** — получение данных для подключения к Long Poll.
-* **messages.getLongPollHistory** — получение истории обновлений через Long Poll.
+* ✅ **messages.getLongPollServer** — получение данных для подключения к Long Poll.
+* ✅ **messages.getLongPollHistory** — получение истории обновлений через Long Poll.

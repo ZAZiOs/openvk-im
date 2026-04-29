@@ -1,6 +1,9 @@
 package lp_models
 
-import "encoding/json"
+import (
+	"encoding/json"
+	db_models "ovk-im/src/models/db"
+)
 
 type Envelope struct {
 	TS      uint64            `json:"ts"`
@@ -28,6 +31,20 @@ type VKEvent interface {
 
 func Pack(e VKEvent, cfg LPConfig) ([]byte, error) {
 	return json.Marshal(e.ToSlice(cfg))
+}
+
+type VKGetLongPollHistoryResponse struct {
+	History  [][]interface{}        `json:"history"`
+	Messages VKApiMessagesWithCount `json:"messages"`
+	Profiles []int64                `json:"profiles"`
+	Groups   []int64                `json:"groups"`
+	NewPTS   uint64                 `json:"new_pts"`
+	More     int                    `json:"more,omitempty"`
+}
+
+type VKApiMessagesWithCount struct {
+	Count int                      `json:"count"`
+	Items []db_models.VKApiMessage `json:"items"`
 }
 
 // --- Flags ---

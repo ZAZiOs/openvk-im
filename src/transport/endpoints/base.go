@@ -7,6 +7,7 @@ import (
 
 	"ovk-im/src/transport/endpoints/core"
 	"ovk-im/src/transport/endpoints/history"
+	lp_ep "ovk-im/src/transport/endpoints/longpoll"
 	"ovk-im/src/transport/endpoints/messages"
 )
 
@@ -64,6 +65,9 @@ func (r *Router) BasicHandler(c *gin.Context) {
 
 		"messages.getHistory":            history.GetHistory,
 		"messages.getHistoryAttachments": history.GetHistoryAttachments,
+
+		"messages.getLongPollServer":  lp_ep.GetLongPollServer,
+		"messages.getLongPollHistory": lp_ep.GetLongPollHistory,
 	}
 
 	handler, exists := methods[slug]
