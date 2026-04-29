@@ -24,6 +24,18 @@ func IsUserInChat(tx *gorm.DB, peerID int64, userID int64) (bool, error) {
 	return count > 0, err
 }
 
+func GetMember(tx *gorm.DB, peerID int64, userID int64) (*db_models.ConversationMember, error) {
+	var member db_models.ConversationMember
+	err := getDB(tx).Where("peer_id = ? AND user_id = ?", peerID, userID).First(&member).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &member, nil
+}
+
 func NextLocalID(tx *gorm.DB, peerID int64, fromID int64) (uint64, error) {
 	var conv db_models.Conversation
 	result := tx.Model(&conv).Where("peer_id = ?", peerID).Update("last_message_id", gorm.Expr("last_message_id + 1"))

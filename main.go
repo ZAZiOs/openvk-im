@@ -16,8 +16,10 @@ import (
 	"ovk-im/src/db"
 	"ovk-im/src/redis"
 	redisrepo "ovk-im/src/repo/redis"
+	"ovk-im/src/repo/search"
 	"ovk-im/src/transport/broadcaster"
 	"ovk-im/src/transport/endpoints"
+	"ovk-im/src/transport/endpoints/core"
 	lp_trans "ovk-im/src/transport/longpoll"
 )
 
@@ -38,6 +40,7 @@ func main() {
 	db.Connect()
 	redis.Init()
 
+	searchRepo := search.NewRepository(db.Instance, []byte(secret))
 	lpBroadcaster := broadcaster.New()
 	lpRepo := redisrepo.NewRepo(redis.Client)
 
@@ -64,9 +67,12 @@ func main() {
 	})
 
 	endpointRouter := &endpoints.Router{
-		DB:          db.Instance,
-		LPRepo:      lpRepo,
-		Broadcaster: lpBroadcaster,
+		BaseHandler: core.BaseHandler{
+			DB:          db.Instance,
+			LPRepo:      lpRepo,
+			Broadcaster: lpBroadcaster,
+			SearchRepo:  searchRepo,
+		},
 	}
 	internal := r.Group("/method")
 	{

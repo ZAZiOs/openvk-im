@@ -41,3 +41,10 @@ func (ej *EncryptedJSON) Scan(value interface{}) error {
 func (ej EncryptedJSON) Unmarshal(v interface{}) error {
 	return json.Unmarshal(ej, v)
 }
+
+func (ej EncryptedJSON) MarshalJSON() ([]byte, error) {
+	if len(ej) == 0 {
+		return []byte("null"), nil
+	}
+	return json.Marshal(string(ej))
+}

@@ -1,4 +1,4 @@
-package endpoints
+package messages
 
 import (
 	"net/http"
@@ -7,24 +7,20 @@ import (
 	lp_models "ovk-im/src/models/longpoll"
 	"ovk-im/src/repo/chat"
 	"strconv"
+	"strings"
 	"time"
+
+	"ovk-im/src/transport/endpoints/core"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
-/*
-Логика эндпоинта:
+type MessagesHandler struct {
+	core.BaseHandler
+}
 
-Если передан user_id || chat_id - тупо сделать его peer_id
-
-Есть ли запись о диалоге между отправителем и peerом
-Если диалога нет - сделать диалог (CreateConverstaion, UserID1, PeerID2 (can be club)) и сразу же сохранить сообщение
-В ином случае добавить сообщение.
-
-*/
-
-func (r *Router) MessagesSend(c *gin.Context) {
+func Send(c *gin.Context, r *core.BaseHandler) {
 	var peerID int64
 	val, exists := c.Get("userID")
 	if !exists || val == nil {
@@ -47,25 +43,68 @@ func (r *Router) MessagesSend(c *gin.Context) {
 		return
 	}
 
+	// ------------------------------------
+
 	message := c.Query("message")
 	attachment := c.Query("attachment")
+	randomIDStr := c.Query("random_id")
+	replyToStr := c.Query("reply_to")
+	forwardMessagesRaw := c.Query("forward_messages")
 
+	// Message n Attachment
 	if message == "" && attachment == "" {
 		r.Reject(c, 100, "One of the parameters is missing: message or attachment")
 		return
 	}
 
+	// Message
 	if len(message) > 9000 {
 		r.Reject(c, 914, "Message is too long")
 		return
 	}
 
+	// Attachment
 	if attachment != "" {
-		if !IsValidAttachments(attachment) {
+		if !core.IsValidAttachments(attachment) {
 			r.Reject(c, 100, "Invalid attachment format")
 			return
 		}
 	}
+
+	// RandomID
+	if randomIDStr == "" {
+		r.Reject(c, 100, "random_id is required")
+		return
+	}
+	randomID, _ := strconv.ParseInt(randomIDStr, 10, 64)
+	redisKey := "rid:" + strconv.FormatInt(currentUserID, 10) + ":" + randomIDStr
+
+	oldLocalID, err := r.LPRepo.Client.Get(c.Request.Context(), redisKey).Result()
+	if err == nil && oldLocalID != "" {
+		lID, _ := strconv.ParseUint(oldLocalID, 10, 64)
+		c.JSON(http.StatusOK, gin.H{
+			"response": lID,
+		})
+		return
+	}
+
+	// ReplyTo
+	var replyTo uint64
+	if replyToStr != "" {
+		id, _ := strconv.ParseUint(replyToStr, 10, 64)
+		replyTo = id
+	}
+
+	// Forward
+	if forwardMessagesRaw != "" {
+		ids := strings.Split(forwardMessagesRaw, ",")
+		if len(ids) > 100 {
+			r.Reject(c, 100, "Too many forward_messages")
+			return
+		}
+	}
+
+	// ------------------------------------
 
 	if currentUserID < 0 && peerID > 0 && peerID < 2000000000 {
 		conv, err := chat.GetConversation(dbx.Instance, peerID)
@@ -88,8 +127,10 @@ func (r *Router) MessagesSend(c *gin.Context) {
 		}
 	}
 
+	// ------------------------------------------------
+
 	var finalLocalID uint64
-	err := dbx.Instance.Transaction(func(tx *gorm.DB) error {
+	err = dbx.Instance.Transaction(func(tx *gorm.DB) error {
 		localID, err := chat.NextLocalID(tx, peerID, currentUserID)
 		if err != nil {
 			return err
@@ -118,21 +159,39 @@ func (r *Router) MessagesSend(c *gin.Context) {
 		}
 
 		newMessage := db_models.Message{
-			ChatID:      peerID,
-			LocalID:     localID,
-			FromID:      currentUserID,
-			Text:        db_models.EncryptedJSON(message),
-			Attachments: db_models.EncryptedJSON(attachment),
-			CreatedAt:   time.Now(),
+			ChatID:          peerID,
+			LocalID:         localID,
+			FromID:          currentUserID,
+			Text:            db_models.EncryptedJSON(message),
+			Attachments:     db_models.EncryptedJSON(attachment),
+			ReplyTo:         &replyTo,
+			RandomID:        randomID,
+			ForwardMessages: forwardMessagesRaw,
+			CreatedAt:       time.Now(),
 		}
 
-		return tx.Create(&newMessage).Error
+		if err := tx.Create(&newMessage).Error; err != nil {
+			return err
+		}
+
+		if message != "" {
+			indexes := r.SearchRepo.GenerateBlindIndexes(newMessage.ID, peerID, message)
+			if len(indexes) > 0 {
+				if err := tx.Create(&indexes).Error; err != nil {
+					return err
+				}
+			}
+		}
+
+		return nil
 	})
 
 	if err != nil {
 		r.Reject(c, 10, "Internal server error during saving")
 		return
 	}
+
+	r.LPRepo.Client.Set(c.Request.Context(), redisKey, finalLocalID, 24*time.Hour)
 
 	lpEvent := lp_models.NewMessageEvent{
 		MessageID:   finalLocalID,

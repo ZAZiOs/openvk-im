@@ -1,0 +1,108 @@
+package messages
+
+import (
+	"net/http"
+	"ovk-im/src/db"
+	db_models "ovk-im/src/models/db"
+	"ovk-im/src/transport/endpoints/core"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+	"gorm.io/gorm/clause"
+)
+
+func MarkAsImportant(c *gin.Context, r *core.BaseHandler) {
+	val, _ := c.Get("userID")
+	currentUserID := val.(int64)
+
+	idsStr := c.Query("message_ids")
+	important, _ := strconv.Atoi(c.DefaultQuery("important", "1"))
+
+	if idsStr == "" {
+		r.Reject(c, 100, "One of the parameters is missing: message_ids")
+		return
+	}
+
+	parts := strings.Split(idsStr, ",")
+	var ids []uint64
+	for _, p := range parts {
+		if id, err := strconv.ParseUint(strings.TrimSpace(p), 10, 64); err == nil {
+			ids = append(ids, id)
+		}
+	}
+
+	if important == 1 {
+		for _, mID := range ids {
+			db.Instance.Clauses(clause.OnConflict{DoNothing: true}).Create(&db_models.ImportantMessage{
+				UserID:    currentUserID,
+				MessageID: mID,
+				CreatedAt: time.Now(),
+			})
+		}
+	} else {
+		db.Instance.Where("user_id = ? AND message_id IN ?", currentUserID, ids).
+			Delete(&db_models.ImportantMessage{})
+	}
+
+	c.JSON(http.StatusOK, gin.H{"response": ids})
+}
+
+func GetImportantMessages(c *gin.Context, r *core.BaseHandler) {
+	val, _ := c.Get("userID")
+	currentUserID := val.(int64)
+
+	count, _ := strconv.Atoi(c.DefaultQuery("count", "20"))
+	if count > 200 {
+		count = 200
+	}
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	extended := c.Query("extended") == "1"
+
+	var msgs []db_models.Message
+
+	query := db.Instance.Table("messages").
+		Joins("JOIN important_messages ON important_messages.message_id = messages.id").
+		Where("important_messages.user_id = ?", currentUserID)
+
+	var totalCount int64
+	query.Count(&totalCount)
+
+	err := query.Order("important_messages.created_at DESC").
+		Limit(count).Offset(offset).
+		Find(&msgs).Error
+
+	if err != nil {
+		r.Reject(c, 10, "Internal server error")
+		return
+	}
+
+	responseItems := make([]db_models.VKApiMessage, len(msgs))
+	userIDsMap := make(map[int64]bool)
+
+	for i, m := range msgs {
+		v := m.ToVKApiStruct(db.Instance, 0, currentUserID)
+		v.Important = true
+		responseItems[i] = v
+
+		if extended && m.FromID > 0 {
+			userIDsMap[m.FromID] = true
+		}
+	}
+
+	result := gin.H{
+		"count": totalCount,
+		"items": responseItems,
+	}
+
+	if extended {
+		uIDs := []int64{}
+		for id := range userIDsMap {
+			uIDs = append(uIDs, id)
+		}
+		result["profiles"] = uIDs
+	}
+
+	c.JSON(http.StatusOK, gin.H{"response": result})
+}

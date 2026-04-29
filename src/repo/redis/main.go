@@ -8,15 +8,15 @@ import (
 )
 
 type Repo struct {
-	client *redis.Client
+	Client *redis.Client
 }
 
-func NewRepo(client *redis.Client) *Repo {
-	return &Repo{client: client}
+func NewRepo(Client *redis.Client) *Repo {
+	return &Repo{Client: Client}
 }
 
 func (r *Repo) GetUserIDBySession(ctx context.Context, key string) (int64, error) {
-	val, err := r.client.Get(ctx, "im:session:api:"+key).Result()
+	val, err := r.Client.Get(ctx, "im:session:api:"+key).Result()
 	if err == redis.Nil {
 		return 0, ErrKeyNotFound
 	}

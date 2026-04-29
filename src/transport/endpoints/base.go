@@ -1,40 +1,24 @@
 package endpoints
 
 import (
-	"net/http"
-	"regexp"
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"gorm.io/gorm"
 
-	redis "ovk-im/src/repo/redis"
-	"ovk-im/src/transport/broadcaster"
+	"ovk-im/src/transport/endpoints/core"
+	"ovk-im/src/transport/endpoints/history"
+	"ovk-im/src/transport/endpoints/messages"
 )
 
 type Router struct {
-	DB          *gorm.DB
-	LPRepo      *redis.Repo
-	Broadcaster *broadcaster.Broadcaster
-}
-
-type VKError struct {
-	ErrorCode     int            `json:"error_code"`
-	ErrorMsg      string         `json:"error_msg"`
-	RequestParams []RequestParam `json:"request_params,omitempty"`
-}
-
-type RequestParam struct {
-	Key   string `json:"key"`
-	Value string `json:"value"`
+	core.BaseHandler
 }
 
 func (r *Router) AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		key := c.Query("key")
 		if key == "" {
-			key = c.GetHeader("Authorization")
-			key = strings.TrimPrefix(key, "Bearer ")
+			key = strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer ")
 		}
 
 		if key == "" {
@@ -61,18 +45,6 @@ func (r *Router) Register(group *gin.RouterGroup) {
 
 	protected.Match([]string{"GET", "POST"}, "/:slug", r.BasicHandler)
 }
-func (r *Router) Reject(c *gin.Context, errorCode int, errorMsg string) {
-	params := make([]RequestParam, 0)
-	for k, v := range c.Request.URL.Query() {
-		params = append(params, RequestParam{Key: k, Value: v[0]})
-	}
-
-	c.JSON(http.StatusOK, VKError{
-		ErrorCode:     errorCode,
-		ErrorMsg:      errorMsg,
-		RequestParams: params,
-	})
-}
 
 func (r *Router) BasicHandler(c *gin.Context) {
 	if c.IsAborted() {
@@ -81,35 +53,24 @@ func (r *Router) BasicHandler(c *gin.Context) {
 
 	slug := c.Param("slug")
 
-	methods := map[string]gin.HandlerFunc{
-		"messages.send": r.MessagesSend,
+	methods := map[string]func(*gin.Context, *core.BaseHandler){
+		"messages.send":                 messages.Send,
+		"messages.search":               messages.Search,
+		"messages.pin":                  messages.Pin,
+		"messages.unpin":                messages.Unpin,
+		"messages.markAsImportant":      messages.MarkAsImportant,
+		"messages.getImportantMessages": messages.GetImportantMessages,
+		"messages.markAsRead":           messages.MarkAsRead,
+
+		"messages.getHistory":            history.GetHistory,
+		"messages.getHistoryAttachments": history.GetHistoryAttachments,
 	}
 
 	handler, exists := methods[slug]
 	if !exists {
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": "method_not_found",
-			"slug":  slug,
-		})
+		r.Reject(c, 8, "Unknown method passed")
 		return
 	}
 
-	handler(c)
-}
-
-var reAttachment = regexp.MustCompile(`^(photo|video|audio|doc|wall|market|poll|question)-?\d+_\d+$`)
-
-func IsValidAttachments(attachmentStr string) bool {
-	if attachmentStr == "" {
-		return true
-	}
-
-	parts := strings.Split(attachmentStr, ",")
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if !reAttachment.MatchString(part) {
-			return false
-		}
-	}
-	return true
+	handler(c, &r.BaseHandler)
 }

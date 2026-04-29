@@ -26,7 +26,7 @@ type StoredEvent struct {
 }
 
 func (r *Repo) GetUserIDByKey(ctx context.Context, key string) (int64, error) {
-	val, err := r.client.Get(ctx, "im:lp:key:"+key).Result()
+	val, err := r.Client.Get(ctx, "im:lp:key:"+key).Result()
 	if err == redis.Nil {
 		return 0, ErrKeyNotFound
 	}
@@ -37,7 +37,7 @@ func (r *Repo) GetUserIDByKey(ctx context.Context, key string) (int64, error) {
 }
 
 func (r *Repo) GetUserTS(ctx context.Context, userID int64) (uint64, error) {
-	val, err := r.client.Get(ctx, fmt.Sprintf("im:lp:ts:%d", userID)).Uint64()
+	val, err := r.Client.Get(ctx, fmt.Sprintf("im:lp:ts:%d", userID)).Uint64()
 	if err == redis.Nil {
 		return 0, nil
 	}
@@ -47,7 +47,7 @@ func (r *Repo) GetUserTS(ctx context.Context, userID int64) (uint64, error) {
 func (r *Repo) GetUpdates(ctx context.Context, userID int64, lastTS uint64) ([]lp_models.VKEvent, uint64, error) {
 	key := fmt.Sprintf("im:lp:events:%d", userID)
 
-	first, err := r.client.ZRangeWithScores(ctx, key, 0, 0).Result()
+	first, err := r.Client.ZRangeWithScores(ctx, key, 0, 0).Result()
 	if err == nil && len(first) > 0 {
 		if float64(lastTS) < first[0].Score-1 {
 			currentTS, _ := r.GetUserTS(ctx, userID)
@@ -55,7 +55,7 @@ func (r *Repo) GetUpdates(ctx context.Context, userID int64, lastTS uint64) ([]l
 		}
 	}
 
-	res, err := r.client.ZRangeArgs(ctx, redis.ZRangeArgs{
+	res, err := r.Client.ZRangeArgs(ctx, redis.ZRangeArgs{
 		Key:     key,
 		ByScore: true,
 		Start:   fmt.Sprintf("(%d", lastTS),
@@ -138,7 +138,7 @@ func (r *Repo) GetUpdates(ctx context.Context, userID int64, lastTS uint64) ([]l
 
 func (r *Repo) PushEvent(ctx context.Context, userID int64, eventType string, event lp_models.VKEvent) (uint64, uint64, error) {
 	tsKey := fmt.Sprintf("im:lp:ts:%d", userID)
-	newTS, _ := r.client.Incr(ctx, tsKey).Result()
+	newTS, _ := r.Client.Incr(ctx, tsKey).Result()
 
 	var newPTS uint64
 	if isHistoryEvent(eventType) {
@@ -157,7 +157,7 @@ func (r *Repo) PushEvent(ctx context.Context, userID int64, eventType string, ev
 	})
 	eventsKey := fmt.Sprintf("im:lp:events:%d", userID)
 
-	pipe := r.client.Pipeline()
+	pipe := r.Client.Pipeline()
 	pipe.ZAdd(ctx, eventsKey, redis.Z{Score: float64(newTS), Member: stored})
 	pipe.ZRemRangeByRank(ctx, eventsKey, 0, -201)
 	pipe.Expire(ctx, eventsKey, 48*time.Hour)
@@ -169,7 +169,7 @@ func (r *Repo) PushEvent(ctx context.Context, userID int64, eventType string, ev
 func (r *Repo) incrementUserPTS(ctx context.Context, userID int64) (uint64, error) {
 	ptsKey := fmt.Sprintf("im:lp:pts:%d", userID)
 
-	newPTS, err := r.client.Incr(ctx, ptsKey).Result()
+	newPTS, err := r.Client.Incr(ctx, ptsKey).Result()
 	if err != nil {
 		return 0, err
 	}
@@ -191,7 +191,7 @@ func (r *Repo) incrementUserPTS(ctx context.Context, userID int64) (uint64, erro
 func (r *Repo) GetUserPTS(ctx context.Context, userID int64) (uint64, error) {
 	ptsKey := fmt.Sprintf("im:lp:pts:%d", userID)
 
-	val, err := r.client.Get(ctx, ptsKey).Uint64()
+	val, err := r.Client.Get(ctx, ptsKey).Uint64()
 	if err == nil {
 		return val, nil
 	}
@@ -204,7 +204,7 @@ func (r *Repo) GetUserPTS(ctx context.Context, userID int64) (uint64, error) {
 			return 0, nil
 		}
 
-		r.client.Set(ctx, ptsKey, state.PTS, 0)
+		r.Client.Set(ctx, ptsKey, state.PTS, 0)
 		return state.PTS, nil
 	}
 
