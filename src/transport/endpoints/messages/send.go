@@ -193,13 +193,19 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 
 	r.LPRepo.Client.Set(c.Request.Context(), redisKey, finalLocalID, 24*time.Hour)
 
+	// --- ПОДГОТОВКА LONGPOLL СОБЫТИЯ ---
+	lpAttach := lp_models.NewLPAttachments(attachment)
+
+	// Добавить проверку на emoji
+
 	lpEvent := lp_models.NewMessageEvent{
 		MessageID:   finalLocalID,
 		Flags:       lp_models.MessageFlags{Value: 0},
 		PeerID:      peerID,
 		Timestamp:   int(time.Now().Unix()),
 		Text:        message,
-		Attachments: make(map[string]interface{}),
+		Attachments: &lpAttach,
+		RandomID:    int(randomID),
 	}
 
 	var recipients []int64

@@ -1,9 +1,12 @@
 package core
 
 import (
+	"context"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 
 	"ovk-im/src/db"
 	db_models "ovk-im/src/models/db"
@@ -66,6 +69,38 @@ func IsValidAttachments(attachmentStr string) bool {
 	return true
 }
 
+func ParseAttachmentsForLongPoll(attachmentStr string) map[string]interface{} {
+	res := make(map[string]interface{})
+	if attachmentStr == "" {
+		return res
+	}
+
+	parts := strings.Split(attachmentStr, ",")
+	for i, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		idx := strconv.Itoa(i + 1)
+
+		typeEnd := 0
+		for j, char := range part {
+			if (char >= '0' && char <= '9') || char == '-' {
+				typeEnd = j
+				break
+			}
+		}
+
+		if typeEnd > 0 {
+			res["attach"+idx+"_type"] = part[:typeEnd]
+			res["attach"+idx] = part[typeEnd:]
+		}
+	}
+
+	return res
+}
+
 func (r *BaseHandler) BroadcastChatSomethingChanged(ctx *gin.Context, peerID int64, actorID int64) {
 	/*  Я не нашёл подтверждения какой именно chatID юзался. Поэтому я пропихну peerID
 
@@ -115,5 +150,55 @@ func (r *BaseHandler) BroadcastMarkAsRead(ctx *gin.Context, peerID int64, userID
 			LocalID: lastReadID,
 		})
 		r.Broadcaster.Notify(mID)
+	}
+}
+
+func (r *BaseHandler) SendFlagsUpdate(uid int64, peerID int64, localID uint64, flags uint64, forAll bool) {
+	event := lp_models.MsgReplaceFlagsEvent{
+		MessageID: localID,
+		Flags:     lp_models.MessageFlags{Value: lp_models.MessageFlag(flags)},
+		PeerID:    peerID,
+	}
+
+	if forAll {
+		var members []int64
+		r.DB.Model(&db_models.ConversationMember{}).Where("peer_id = ?", peerID).Pluck("user_id", &members)
+
+		for _, memberID := range members {
+			r.LPRepo.PushEvent(context.Background(), memberID, "msg_flags_replace", event)
+			r.Broadcaster.Notify(memberID)
+		}
+	} else {
+		r.LPRepo.PushEvent(context.Background(), uid, "msg_flags_replace", event)
+		r.Broadcaster.Notify(uid)
+	}
+}
+
+func (r *BaseHandler) SendUpdateEvent(peerID int64, localID uint64, text string, attachStr string, senderID int64) {
+	lpAttach := lp_models.NewLPAttachments(attachStr)
+
+	updateEvent := lp_models.UpdateMessageEvent{
+		MessageID:   localID,
+		PeerID:      peerID,
+		NewText:     text,
+		Attachments: &lpAttach,
+		Timestamp:   uint64(time.Now().Unix()),
+	}
+
+	var recipients []int64
+	if peerID > 2000000000 {
+		r.DB.Model(&db_models.ConversationMember{}).
+			Where("peer_id = ? AND left_at IS NULL", peerID).
+			Pluck("user_id", &recipients)
+	} else {
+		recipients = append(recipients, senderID)
+		if peerID != senderID {
+			recipients = append(recipients, peerID)
+		}
+	}
+
+	for _, uid := range recipients {
+		r.LPRepo.PushEvent(context.Background(), uid, "msg_update", updateEvent)
+		r.Broadcaster.Notify(uid)
 	}
 }

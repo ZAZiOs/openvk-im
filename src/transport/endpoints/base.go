@@ -55,13 +55,18 @@ func (r *Router) BasicHandler(c *gin.Context) {
 	slug := c.Param("slug")
 
 	methods := map[string]func(*gin.Context, *core.BaseHandler){
-		"messages.send":                 messages.Send,
-		"messages.search":               messages.Search,
-		"messages.pin":                  messages.Pin,
-		"messages.unpin":                messages.Unpin,
-		"messages.markAsImportant":      messages.MarkAsImportant,
-		"messages.getImportantMessages": messages.GetImportantMessages,
-		"messages.markAsRead":           messages.MarkAsRead,
+		"messages.send":                       messages.Send,
+		"messages.edit":                       messages.Edit,
+		"messages.search":                     messages.Search,
+		"messages.pin":                        messages.Pin,
+		"messages.unpin":                      messages.Unpin,
+		"messages.markAsImportant":            messages.MarkAsImportant,
+		"messages.getImportantMessages":       messages.GetImportantMessages,
+		"messages.markAsRead":                 messages.MarkAsRead,
+		"messages.delete":                     messages.Delete,
+		"messages.restore":                    messages.Restore,
+		"messages.getByID":                    messages.GetByID,
+		"messages.getByConversationMessageId": messages.GetByConversationMessageID,
 
 		"messages.getHistory":            history.GetHistory,
 		"messages.getHistoryAttachments": history.GetHistoryAttachments,

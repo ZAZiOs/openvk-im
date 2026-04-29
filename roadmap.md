@@ -4,12 +4,12 @@
 
 ### Работа с сообщениями "messages"
 * ✅ **messages.send** — отправка сообщения.
-* ❌ **messages.edit** — редактирование сообщения.
-* ❌ **messages.delete** — удаление сообщения.
-* ❌ **messages.restore** — восстановление удаленного сообщения.
+* ✅ **messages.edit** — редактирование сообщения.
+* ✅ **messages.delete** — удаление сообщения.
+* ✅ **messages.restore** — восстановление удаленного сообщения.
 * ✅ **messages.search** — поиск по сообщениям пользователя.
-* ❌ **messages.getById** — получение сообщений по их ID.
-* ❌ **messages.getByConversationMessageId** — получение сообщений по ID внутри конкретной беседы.
+* ✅ **messages.getById** — получение сообщений по их ID.
+* ✅ **messages.getByConversationMessageId** — получение сообщений по ID внутри конкретной беседы.
 * ✅ **messages.markAsRead** — пометка сообщений как прочитанных.
 * ✅ **messages.markAsImportant** — пометка сообщений как важных.
 * ✅ **messages.getImportantMessages** — получение списка важных сообщений.

@@ -3,6 +3,8 @@ package lp_models
 import (
 	"encoding/json"
 	db_models "ovk-im/src/models/db"
+	"strconv"
+	"strings"
 )
 
 type Envelope struct {
@@ -45,6 +47,62 @@ type VKGetLongPollHistoryResponse struct {
 type VKApiMessagesWithCount struct {
 	Count int                      `json:"count"`
 	Items []db_models.VKApiMessage `json:"items"`
+}
+
+// Attachments
+
+type LPAttachments struct {
+	Items  []LPAttachmentItem
+	Source string
+	Mid    string
+	Emoji  bool
+}
+
+type LPAttachmentItem struct {
+	Type string
+	Data string
+}
+
+func (a LPAttachments) ToMap() map[string]interface{} {
+	res := make(map[string]interface{})
+
+	for i, item := range a.Items {
+		idx := strconv.Itoa(i + 1)
+		res["attach"+idx+"_type"] = item.Type
+		res["attach"+idx] = item.Data
+	}
+
+	if a.Source != "" {
+		res["source_act"] = a.Source
+	}
+	if a.Mid != "" {
+		res["source_mid"] = a.Mid
+	}
+	if a.Emoji {
+		res["emoji"] = "1"
+	}
+
+	return res
+}
+
+func NewLPAttachments(raw string) LPAttachments {
+	lpa := LPAttachments{Items: []LPAttachmentItem{}}
+	if raw == "" {
+		return lpa
+	}
+
+	parts := strings.Split(raw, ",")
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		typeEnd := strings.IndexAny(part, "0123456789-")
+		if typeEnd > 0 {
+			lpa.Items = append(lpa.Items, LPAttachmentItem{
+				Type: part[:typeEnd],
+				Data: part[typeEnd:],
+			})
+		}
+	}
+	return lpa
 }
 
 // --- Flags ---
@@ -170,7 +228,7 @@ type NewMessageEvent struct {
 	PeerID      int64
 	Timestamp   int
 	Text        string
-	Attachments map[string]interface{}
+	Attachments *LPAttachments
 	RandomID    int
 }
 
@@ -186,13 +244,13 @@ func (e NewMessageEvent) ToSlice(cfg LPConfig) []interface{} {
 	}
 
 	res := []interface{}{
-		4,                  // code
-		e.MessageID,        // $message_id
-		e.Flags.Value,      // $flags
-		peerID,             // $from_id / $peer_id
-		e.Timestamp,        // $timestamp
-		" [NotSupported] ", // $subject (Имя беседы / Email, необязательно)
-		e.Text,             // $text
+		4,             // code
+		e.MessageID,   // $message_id
+		e.Flags.Value, // $flags
+		peerID,        // $from_id / $peer_id
+		e.Timestamp,   // $timestamp
+		"",            // $subject (Имя беседы / Email, необязательно)
+		e.Text,        // $text
 	}
 
 	// mode=2:
@@ -200,14 +258,12 @@ func (e NewMessageEvent) ToSlice(cfg LPConfig) []interface{} {
 		if e.Attachments == nil {
 			res = append(res, map[string]interface{}{})
 		} else {
-			res = append(res, e.Attachments)
+			res = append(res, e.Attachments.ToMap())
 		}
 	}
 
 	if cfg.ReturnRandomID() {
-		if e.RandomID != 0 {
-			res = append(res, e.RandomID)
-		}
+		res = append(res, e.RandomID)
 	}
 
 	return res
@@ -215,21 +271,36 @@ func (e NewMessageEvent) ToSlice(cfg LPConfig) []interface{} {
 
 // v2
 type UpdateMessageEvent struct {
-	MessageId   uint64
+	MessageID   uint64
 	Mask        MessageFlags // Работает как set.
-	PeerId      int64
+	PeerID      int64
 	Timestamp   uint64
 	NewText     string
-	Attachments map[string]interface{}
+	Attachments *LPAttachments
 	Stub        uint8
 }
 
 func (e UpdateMessageEvent) ToSlice(cfg LPConfig) []interface{} {
-	attachments := e.Attachments
-	if attachments == nil {
-		attachments = map[string]interface{}{}
+	res := []interface{}{
+		5,
+		e.MessageID,
+		e.Mask.ToUint64(),
+		e.PeerID,
+		e.Timestamp,
+		e.NewText,
 	}
-	return []interface{}{5, e.MessageId, e.Mask.ToUint64(), e.PeerId, e.Timestamp, e.NewText, attachments, e.Stub}
+
+	if cfg.HasAttachments() {
+		if e.Attachments == nil {
+			res = append(res, map[string]interface{}{})
+		} else {
+			res = append(res, e.Attachments.ToMap())
+		}
+	}
+
+	res = append(res, e.Stub)
+
+	return res
 }
 
 // v1
