@@ -26,6 +26,10 @@ func LongPollHandler(
 	modeStr := r.URL.Query().Get("mode")
 	versionStr := r.URL.Query().Get("version")
 
+	if versionStr == "" {
+		versionStr = "2"
+	}
+
 	ts, _ := strconv.ParseUint(tsStr, 10, 64)
 	mode, _ := strconv.Atoi(modeStr)
 	version, _ := strconv.Atoi(versionStr)
