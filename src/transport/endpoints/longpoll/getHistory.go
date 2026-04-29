@@ -85,7 +85,7 @@ func GetLongPollHistory(c *gin.Context, r *core.BaseHandler) {
 			peerID := slice[3].(int64)
 
 			var m db_models.Message
-			err := db.Instance.Where("chat_id = ? AND local_id = ?", peerID, localID).First(&m).Error
+			err := db.Instance.Where("peer_id = ? AND local_id = ?", peerID, localID).First(&m).Error
 			if err == nil {
 				v := m.ToVKApiStruct(db.Instance, 0, userID)
 				msgItems = append(msgItems, v)

@@ -33,7 +33,7 @@ func Pin(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	var msg db_models.Message
-	if err := db.Instance.Where("chat_id = ? AND local_id = ?", peerID, messageID).First(&msg).Error; err != nil {
+	if err := db.Instance.Where("peer_id = ? AND local_id = ?", peerID, messageID).First(&msg).Error; err != nil {
 		r.Reject(c, 946, "Message not found")
 		return
 	}
@@ -46,6 +46,8 @@ func Pin(c *gin.Context, r *core.BaseHandler) {
 		r.Reject(c, 10, "Internal server error")
 		return
 	}
+
+	r.BroadcastChatSomethingChanged(c, peerID, currentUserID)
 
 	c.JSON(http.StatusOK, gin.H{
 		"response": msg.ToVKApiStruct(db.Instance, 0, currentUserID),
@@ -78,6 +80,8 @@ func Unpin(c *gin.Context, r *core.BaseHandler) {
 		r.Reject(c, 10, "Internal server error")
 		return
 	}
+
+	r.BroadcastChatSomethingChanged(c, peerID, currentUserID)
 
 	c.JSON(http.StatusOK, gin.H{
 		"response": 1,

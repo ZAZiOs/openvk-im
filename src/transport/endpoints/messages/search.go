@@ -75,7 +75,7 @@ func Search(c *gin.Context, r *core.BaseHandler) {
 		}
 		err = db.Instance.Model(&db_models.MessageSearchIndex{}).
 			Select("message_id").
-			Where("chat_id IN ? AND word_hash IN ?", accessibleChatIDs, r.SearchRepo.PrepareHashes(q)).
+			Where("peer_id IN ? AND word_hash IN ?", accessibleChatIDs, r.SearchRepo.PrepareHashes(q)).
 			Group("message_id").
 			Having("COUNT(DISTINCT word_hash) = ?", r.SearchRepo.WordsCount(q)).
 			Pluck("message_id", &messageIDs).Error
@@ -120,10 +120,10 @@ func Search(c *gin.Context, r *core.BaseHandler) {
 			} else if m.FromID < 0 {
 				groupIDsMap[-m.FromID] = true
 			}
-			if m.ChatID > 0 && m.ChatID < 2000000000 {
-				userIDsMap[m.ChatID] = true
-			} else if m.ChatID < 0 {
-				groupIDsMap[-m.ChatID] = true
+			if m.PeerID > 0 && m.PeerID < 2000000000 {
+				userIDsMap[m.PeerID] = true
+			} else if m.PeerID < 0 {
+				groupIDsMap[-m.PeerID] = true
 			}
 
 			if m.ActionMid != 0 {

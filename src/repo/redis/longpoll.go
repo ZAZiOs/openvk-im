@@ -20,6 +20,52 @@ var (
 	ErrKeyNotFound = errors.New("key expired or invalid")
 )
 
+var eventRegistry = map[string]func() lp_models.VKEvent{
+	// Message events
+	"new_msg":           func() lp_models.VKEvent { return &lp_models.NewMessageEvent{} },
+	"msg_update":        func() lp_models.VKEvent { return &lp_models.UpdateMessageEvent{} },
+	"msg_delete":        func() lp_models.VKEvent { return &lp_models.MsgDeleteEvent{} },
+	"msg_replace_flags": func() lp_models.VKEvent { return &lp_models.MsgReplaceFlagsEvent{} },
+	"msg_set_flags":     func() lp_models.VKEvent { return &lp_models.MsgSetFlagsEvent{} },
+	"msg_reset_flags":   func() lp_models.VKEvent { return &lp_models.MsgResetFlagsEvent{} },
+	"mass_delete":       func() lp_models.VKEvent { return &lp_models.MassDeleteMessagesEvent{} },
+	"mass_restore":      func() lp_models.VKEvent { return &lp_models.MassRestoreMessagesEvent{} },
+
+	// Read events
+	"read_income_before":  func() lp_models.VKEvent { return &lp_models.ReadIncomeBeforeEvent{} },
+	"read_outcome_before": func() lp_models.VKEvent { return &lp_models.ReadOutcomeBeforeEvent{} },
+
+	// User status events
+	"got_online":  func() lp_models.VKEvent { return &lp_models.GotOnlineEvent{} },
+	"got_offline": func() lp_models.VKEvent { return &lp_models.GotOfflineEvent{} },
+
+	// Chat flags events
+	"chat_reset_flags":   func() lp_models.VKEvent { return &lp_models.ChatResetFlagsEvent{} },
+	"chat_replace_flags": func() lp_models.VKEvent { return &lp_models.ChatReplaceFlagsEvent{} },
+	"chat_set_flags":     func() lp_models.VKEvent { return &lp_models.ChatSetFlagsEvent{} },
+
+	// Sync events (v3)
+	"state_sync":    func() lp_models.VKEvent { return &lp_models.StateSyncEvent{} },
+	"metadata_sync": func() lp_models.VKEvent { return &lp_models.MetaDataSyncEvent{} },
+
+	// Chat events
+	"chat_something_changed": func() lp_models.VKEvent { return &lp_models.ChatSomethingChangedEvent{} },
+	"chat_update":            func() lp_models.VKEvent { return &lp_models.ChatUpdateEvent{} },
+
+	// Typing events
+	"is_dm_typing":   func() lp_models.VKEvent { return &lp_models.IsDMTypingEvent{} },
+	"is_chat_typing": func() lp_models.VKEvent { return &lp_models.IsChatTypingEvent{} },
+	"multi_typing":   func() lp_models.VKEvent { return &lp_models.MultiUsersTypingEvent{} },
+	"multi_audio":    func() lp_models.VKEvent { return &lp_models.MultiUsersAudioRecordingEvent{} },
+
+	// Call events
+	"call": func() lp_models.VKEvent { return &lp_models.MakingACallEvent{} },
+
+	// etc
+	"counter":      func() lp_models.VKEvent { return &lp_models.CounterUpdateEvent{} },
+	"notification": func() lp_models.VKEvent { return &lp_models.NotificationSetEvent{} },
+}
+
 type StoredEvent struct {
 	Type string          `json:"t"`
 	Data json.RawMessage `json:"d"`
@@ -73,58 +119,11 @@ func (r *Repo) GetUpdates(ctx context.Context, userID int64, lastTS uint64) ([]l
 			continue
 		}
 
-		var ev lp_models.VKEvent
-
-		// Маппинг строковых типов в структуры lpm
-		switch stored.Type {
-		case "msg_new":
-			var e lp_models.NewMessageEvent
-			json.Unmarshal(stored.Data, &e)
-			ev = e
-		case "msg_delete":
-			var e lp_models.MsgDeleteEvent
-			json.Unmarshal(stored.Data, &e)
-			ev = e
-		case "msg_flags_replace":
-			var e lp_models.MsgReplaceFlagsEvent
-			json.Unmarshal(stored.Data, &e)
-			ev = e
-		case "msg_flags_set":
-			var e lp_models.MsgSetFlagsEvent
-			json.Unmarshal(stored.Data, &e)
-			ev = e
-		case "msg_flags_reset":
-			var e lp_models.MsgResetFlagsEvent
-			json.Unmarshal(stored.Data, &e)
-			ev = e
-		case "read_in":
-			var e lp_models.ReadIncomeBeforeEvent
-			json.Unmarshal(stored.Data, &e)
-			ev = e
-		case "read_out":
-			var e lp_models.ReadOutcomeBeforeEvent
-			json.Unmarshal(stored.Data, &e)
-			ev = e
-		case "online":
-			var e lp_models.GotOnlineEvent
-			json.Unmarshal(stored.Data, &e)
-			ev = e
-		case "offline":
-			var e lp_models.GotOfflineEvent
-			json.Unmarshal(stored.Data, &e)
-			ev = e
-		case "typing_dm":
-			var e lp_models.IsDMTypingEvent
-			json.Unmarshal(stored.Data, &e)
-			ev = e
-		case "typing_chat":
-			var e lp_models.IsChatTypingEvent
-			json.Unmarshal(stored.Data, &e)
-			ev = e
-		}
-
-		if ev != nil {
-			events = append(events, ev)
+		if factory, ok := eventRegistry[stored.Type]; ok {
+			ev := factory()
+			if err := json.Unmarshal(stored.Data, ev); err == nil {
+				events = append(events, ev)
+			}
 		}
 	}
 

@@ -5,6 +5,9 @@ import (
 	"regexp"
 	"strings"
 
+	"ovk-im/src/db"
+	db_models "ovk-im/src/models/db"
+	lp_models "ovk-im/src/models/longpoll"
 	redis "ovk-im/src/repo/redis"
 	"ovk-im/src/repo/search"
 	"ovk-im/src/transport/broadcaster"
@@ -61,4 +64,56 @@ func IsValidAttachments(attachmentStr string) bool {
 		}
 	}
 	return true
+}
+
+func (r *BaseHandler) BroadcastChatSomethingChanged(ctx *gin.Context, peerID int64, actorID int64) {
+	/*  Я не нашёл подтверждения какой именно chatID юзался. Поэтому я пропихну peerID
+
+	В v0-v2 чаты в LongPoll часто передавались как chat_id (peer_id - 2000000000)
+	chatID := peerID
+	if peerID > 2000000000 {
+		chatID = peerID - 2000000000
+	}
+	*/
+
+	var memberIDs []int64
+	db.Instance.Model(&db_models.ConversationMember{}).
+		Where("peer_id = ? AND left_at IS NULL", peerID).
+		Pluck("user_id", &memberIDs)
+
+	for _, uid := range memberIDs {
+		self := 0
+		if uid == actorID {
+			self = 1
+		}
+
+		lpEvent := lp_models.ChatSomethingChangedEvent{
+			ChatID: peerID,
+			Self:   uint8(self),
+		}
+
+		r.LPRepo.PushEvent(ctx, uid, "chat_something_changed", lpEvent)
+		r.Broadcaster.Notify(uid)
+	}
+}
+
+func (r *BaseHandler) BroadcastMarkAsRead(ctx *gin.Context, peerID int64, userID int64, lastReadID uint64) {
+	r.LPRepo.PushEvent(ctx, userID, "read_income_before", lp_models.ReadIncomeBeforeEvent{
+		PeerID:  peerID,
+		LocalID: lastReadID,
+	})
+	r.Broadcaster.Notify(userID)
+
+	var members []int64
+	db.Instance.Model(&db_models.ConversationMember{}).
+		Where("peer_id = ? AND user_id != ? AND left_at IS NULL", peerID, userID).
+		Pluck("user_id", &members)
+
+	for _, mID := range members {
+		r.LPRepo.PushEvent(ctx, mID, "read_outcome_before", lp_models.ReadOutcomeBeforeEvent{
+			PeerID:  userID,
+			LocalID: lastReadID,
+		})
+		r.Broadcaster.Notify(mID)
+	}
 }

@@ -159,7 +159,7 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 		}
 
 		newMessage := db_models.Message{
-			ChatID:          peerID,
+			PeerID:          peerID,
 			LocalID:         localID,
 			FromID:          currentUserID,
 			Text:            db_models.EncryptedJSON(message),
@@ -222,7 +222,7 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 			userEvent.Flags.Add(lp_models.FlagUnread)
 		}
 
-		_, _, err := r.LPRepo.PushEvent(c.Request.Context(), uid, "msg_new", userEvent)
+		_, _, err := r.LPRepo.PushEvent(c.Request.Context(), uid, "new_msg", userEvent)
 		if err == nil {
 			r.Broadcaster.Notify(uid)
 		}

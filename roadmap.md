@@ -10,11 +10,11 @@
 * ✅ **messages.search** — поиск по сообщениям пользователя.
 * ❌ **messages.getById** — получение сообщений по их ID.
 * ❌ **messages.getByConversationMessageId** — получение сообщений по ID внутри конкретной беседы.
-* ⚠️ **messages.markAsRead** — пометка сообщений как прочитанных.
-* ⚠️ **messages.markAsImportant** — пометка сообщений как важных.
-* ⚠️ **messages.getImportantMessages** — получение списка важных сообщений.
-* ⚠️ **messages.pin** — закрепление сообщения.
-* ⚠️ **messages.unpin** — открепление сообщения.
+* ✅ **messages.markAsRead** — пометка сообщений как прочитанных.
+* ✅ **messages.markAsImportant** — пометка сообщений как важных.
+* ✅ **messages.getImportantMessages** — получение списка важных сообщений.
+* ✅ **messages.pin** — закрепление сообщения.
+* ✅ **messages.unpin** — открепление сообщения.
 
 ### Работа с беседами (чатами) "chats"
 * **messages.createChat** — создание новой беседы.

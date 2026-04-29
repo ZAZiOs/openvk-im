@@ -28,7 +28,7 @@ func (r *Repository) hashWord(word string) []byte {
 	return h.Sum(nil)
 }
 
-func (r *Repository) GenerateBlindIndexes(messageID uint64, chatID int64, text string) []dbm.MessageSearchIndex {
+func (r *Repository) GenerateBlindIndexes(messageID uint64, peerID int64, text string) []dbm.MessageSearchIndex {
 	words := strings.Fields(text)
 	var indexes []dbm.MessageSearchIndex
 
@@ -41,7 +41,7 @@ func (r *Repository) GenerateBlindIndexes(messageID uint64, chatID int64, text s
 
 		indexes = append(indexes, dbm.MessageSearchIndex{
 			MessageID: messageID,
-			ChatID:    chatID,
+			PeerID:    peerID,
 			WordHash:  r.hashWord(word),
 		})
 		seen[word] = true
@@ -49,7 +49,7 @@ func (r *Repository) GenerateBlindIndexes(messageID uint64, chatID int64, text s
 	return indexes
 }
 
-func (r *Repository) SearchMessages(chatID int64, query string) ([]uint64, error) {
+func (r *Repository) SearchMessages(peerID int64, query string) ([]uint64, error) {
 	words := strings.Fields(query)
 	if len(words) == 0 {
 		return nil, nil
@@ -70,7 +70,7 @@ func (r *Repository) SearchMessages(chatID int64, query string) ([]uint64, error
 
 	err := r.db.Model(&dbm.MessageSearchIndex{}).
 		Select("message_id").
-		Where("chat_id = ? AND word_hash IN ?", chatID, hashes).
+		Where("peer_id = ? AND word_hash IN ?", peerID, hashes).
 		Group("message_id").
 		Having("COUNT(DISTINCT word_hash) = ?", len(hashes)).
 		Pluck("message_id", &messageIDs).Error

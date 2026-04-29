@@ -46,11 +46,13 @@ type ConversationMember struct {
 	JoinedAt  time.Time  `gorm:"precision:3" json:"joined_at"`
 	LeftAt    *time.Time `gorm:"precision:3" json:"left_at"`
 	JoinCode  *string    `gorm:"type:varchar(191)" json:"join_code"`
+
+	Conversation Conversation `gorm:"foreignKey:PeerID;references:PeerID" json:"-"`
 }
 
 type ChatInvite struct {
 	Code      string `gorm:"primaryKey;type:varchar(191)" json:"code"`
-	ChatID    int64  `gorm:"index" json:"chat_id"`
+	PeerID    int64  `gorm:"index" json:"peer_id"`
 	CreatorID int64  `json:"creator_id"`
 
 	UsageLimit int64 `json:"usage_limit"` // 0 - unlimited
@@ -58,6 +60,8 @@ type ChatInvite struct {
 
 	ExpiresAt *time.Time `gorm:"precision:3" json:"expires_at"`
 	CreatedAt time.Time  `gorm:"precision:3" json:"created_at"`
+
+	Conversation Conversation `gorm:"foreignKey:PeerID;references:PeerID" json:"-"`
 }
 
 /*
@@ -76,7 +80,7 @@ chat_invite_user_by_link
 
 type Message struct {
 	ID       uint64 `gorm:"primaryKey;autoIncrement" json:"id"`
-	ChatID   int64  `gorm:"index" json:"chat_id"`
+	PeerID   int64  `gorm:"index" json:"peer_id"`
 	LocalID  uint64 `json:"local_id"`
 	RandomID int64  `gorm:"index" json:"random_id"` // Дедупликация
 
@@ -98,11 +102,13 @@ type Message struct {
 	CreatedAt time.Time  `gorm:"precision:3" json:"created_at"`
 	EditedAt  *time.Time `gorm:"precision:3" json:"edited_at"`
 	DeletedAt *time.Time `gorm:"precision:3" json:"deleted_at"`
+
+	Conversation Conversation `gorm:"foreignKey:PeerID;references:PeerID" json:"-"`
 }
 
 type MessageSearchIndex struct {
 	MessageID uint64 `gorm:"primaryKey;index:idx_search_word"`
-	ChatID    int64  `gorm:"index:idx_search_word"`
+	PeerID    int64  `gorm:"index:idx_search_word"`
 	WordHash  []byte `gorm:"primaryKey;type:binary(32);index:idx_search_word"`
 }
 
@@ -139,7 +145,7 @@ func (m *Message) ToVKApiStruct(tx *gorm.DB, depth int, currentUserID int64) VKA
 	vkMsg := VKApiMessage{
 		ID:          m.LocalID,
 		Date:        m.CreatedAt.Unix(),
-		PeerID:      m.ChatID,
+		PeerID:      m.PeerID,
 		FromID:      m.FromID,
 		Text:        string(m.Text),
 		RandomID:    m.RandomID,
@@ -180,7 +186,7 @@ func (m *Message) ToVKApiStruct(tx *gorm.DB, depth int, currentUserID int64) VKA
 
 	if m.ReplyTo != nil && *m.ReplyTo > 0 && depth > 0 {
 		var replyMsg Message
-		err := tx.Where("chat_id = ? AND local_id = ?", m.ChatID, *m.ReplyTo).First(&replyMsg).Error
+		err := tx.Where("peer_id = ? AND local_id = ?", m.PeerID, *m.ReplyTo).First(&replyMsg).Error
 		if err == nil {
 			rm := replyMsg.ToVKApiStruct(tx, depth-1, currentUserID)
 			vkMsg.ReplyMessage = &rm
@@ -190,7 +196,7 @@ func (m *Message) ToVKApiStruct(tx *gorm.DB, depth int, currentUserID int64) VKA
 	if m.ForwardMessages != "" && depth > 0 {
 		ids := strings.Split(m.ForwardMessages, ",")
 		var fwdMsgs []Message
-		tx.Where("chat_id = ? AND local_id IN ?", m.ChatID, ids).Find(&fwdMsgs)
+		tx.Where("peer_id = ? AND local_id IN ?", m.PeerID, ids).Find(&fwdMsgs)
 
 		for _, f := range fwdMsgs {
 			vkMsg.ForwardMessages = append(vkMsg.ForwardMessages, f.ToVKApiStruct(tx, depth-1, currentUserID))
@@ -276,7 +282,7 @@ func (c *Conversation) ToVKApiStruct(tx *gorm.DB, currentUserID int64, member *C
 
 	var count int64
 	tx.Model(&Message{}).
-		Where("chat_id = ? AND local_id > ? AND from_id != ?", c.PeerID, c.InReadID, currentUserID).
+		Where("peer_id = ? AND local_id > ? AND from_id != ?", c.PeerID, c.InReadID, currentUserID).
 		Count(&count)
 	conv.UnreadCount = int(count)
 
@@ -305,7 +311,7 @@ func (c *Conversation) ToVKApiStruct(tx *gorm.DB, currentUserID int64, member *C
 
 		if c.PinnedMsgID > 0 {
 			var pMsg Message
-			if err := tx.Where("chat_id = ? AND local_id = ?", c.PeerID, c.PinnedMsgID).First(&pMsg).Error; err == nil {
+			if err := tx.Where("peer_id = ? AND local_id = ?", c.PeerID, c.PinnedMsgID).First(&pMsg).Error; err == nil {
 				res := pMsg.ToVKApiStruct(tx, 0, currentUserID)
 				settings.PinnedMessage = res
 			}
@@ -315,7 +321,7 @@ func (c *Conversation) ToVKApiStruct(tx *gorm.DB, currentUserID int64, member *C
 	}
 
 	var unread int64
-	tx.Model(&Message{}).Where("chat_id = ? AND local_id > ? AND from_id != ?", c.PeerID, conv.InRead, currentUserID).Count(&unread)
+	tx.Model(&Message{}).Where("peer_id = ? AND local_id > ? AND from_id != ?", c.PeerID, conv.InRead, currentUserID).Count(&unread)
 	conv.UnreadCount = int(unread)
 
 	return conv

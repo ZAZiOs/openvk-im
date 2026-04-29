@@ -48,7 +48,7 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	var msgs []db_models.Message
-	query := db.Instance.Where("chat_id = ?", peerID)
+	query := db.Instance.Where("peer_id = ?", peerID)
 
 	order := "local_id DESC"
 	if rev == 1 {
@@ -62,7 +62,7 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	var totalCount int64
-	db.Instance.Model(&db_models.Message{}).Where("chat_id = ?", peerID).Count(&totalCount)
+	db.Instance.Model(&db_models.Message{}).Where("peer_id = ?", peerID).Count(&totalCount)
 
 	responseItems := make([]db_models.VKApiMessage, len(msgs))
 	for i, m := range msgs {

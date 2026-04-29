@@ -27,10 +27,8 @@ func MarkAsRead(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	if peerID != 0 && startID != 0 {
-		err := chat.MarkAsRead(db.Instance, peerID, currentUserID, startID)
-		if err != nil {
-			r.Reject(c, 10, "Internal server error during marking range")
-			return
+		if err := chat.MarkAsRead(db.Instance, peerID, currentUserID, startID); err == nil {
+			r.BroadcastMarkAsRead(c, peerID, currentUserID, startID)
 		}
 	}
 
@@ -43,15 +41,15 @@ func MarkAsRead(c *gin.Context, r *core.BaseHandler) {
 			if id, err := strconv.ParseUint(strings.TrimSpace(p), 10, 64); err == nil {
 				if peerID == 0 {
 					var msg db_models.Message
-					db.Instance.Select("chat_id", "local_id").Where("id = ?", id).First(&msg)
-					foundPeerID = msg.ChatID
+					db.Instance.Select("peer_id", "local_id").Where("id = ?", id).First(&msg)
+					foundPeerID = msg.PeerID
 					if msg.LocalID > maxID {
 						maxID = msg.LocalID
 					}
 				} else {
 					foundPeerID = peerID
 					var msg db_models.Message
-					db.Instance.Select("local_id").Where("id = ? AND chat_id = ?", id, peerID).First(&msg)
+					db.Instance.Select("local_id").Where("id = ? AND peer_id = ?", id, peerID).First(&msg)
 					if msg.LocalID > maxID {
 						maxID = msg.LocalID
 					}
@@ -60,7 +58,9 @@ func MarkAsRead(c *gin.Context, r *core.BaseHandler) {
 		}
 
 		if foundPeerID != 0 && maxID != 0 {
-			chat.MarkAsRead(db.Instance, foundPeerID, currentUserID, maxID)
+			if err := chat.MarkAsRead(db.Instance, foundPeerID, currentUserID, maxID); err == nil {
+				r.BroadcastMarkAsRead(c, foundPeerID, currentUserID, maxID)
+			}
 		}
 	}
 
@@ -68,6 +68,15 @@ func MarkAsRead(c *gin.Context, r *core.BaseHandler) {
 		conv, _ := chat.GetConversation(db.Instance, peerID)
 		if conv != nil {
 			chat.MarkAsRead(db.Instance, peerID, currentUserID, conv.LastMessageID)
+		}
+	}
+
+	if peerID != 0 && startID == 0 && idsStr == "" {
+		conv, _ := chat.GetConversation(db.Instance, peerID)
+		if conv != nil {
+			if err := chat.MarkAsRead(db.Instance, peerID, currentUserID, conv.LastMessageID); err == nil {
+				r.BroadcastMarkAsRead(c, peerID, currentUserID, conv.LastMessageID)
+			}
 		}
 	}
 

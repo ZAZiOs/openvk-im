@@ -57,7 +57,7 @@ func GetHistoryAttachments(c *gin.Context, r *core.BaseHandler) {
 	offset, _ := strconv.Atoi(startFrom)
 
 	var msgs []db_models.Message
-	query := db.Instance.Where("chat_id = ? AND attachments != '[]'", peerID)
+	query := db.Instance.Where("peer_id = ? AND attachments != '[]'", peerID)
 
 	order := "local_id DESC"
 	if c.Query("preserve_order") == "1" {
