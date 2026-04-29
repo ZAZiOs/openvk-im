@@ -39,9 +39,11 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	if peerID == 0 {
-		r.Reject(c, 100, "Invalid peer_id")
+		r.Reject(c, 100, "One of the parameters is missing: user_id, chat_id or peer_id")
 		return
 	}
+
+	internalChatID := chat.GetInternalChatID(peerID, currentUserID)
 
 	// ------------------------------------
 
@@ -105,61 +107,84 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	// ------------------------------------
+	// ПРОВЕРКА ПРАВ: Кто кому может писать
+	// ------------------------------------
 
-	if currentUserID < 0 && peerID > 0 && peerID < 2000000000 {
-		conv, err := chat.GetConversation(dbx.Instance, peerID)
-		if err != nil {
-			r.Reject(c, 10, "Internal server error")
-			return
-		}
-
-		if conv == nil {
-			r.Reject(c, 901, "Can't send messages for users without permission")
-			return
-		}
+	if currentUserID < 0 && peerID < 0 {
+		r.Reject(c, 100, "Communities cannot send messages to other communities")
+		return
 	}
 
-	if peerID > 2000000000 {
-		inChat, err := chat.IsUserInChat(nil, peerID, currentUserID)
+	switch {
+	case peerID > 2000000000:
+		// ПОЛУЧАТЕЛЬ: ЧАТ
+		inChat, err := chat.IsUserInChat(nil, internalChatID, currentUserID)
 		if err != nil || !inChat {
 			r.Reject(c, 917, "You don't have access to this chat")
 			return
 		}
+
+	case peerID < 0:
+		// ПОЛУЧАТЕЛЬ: СООБЩЕСТВО
+		// Тут обычно проверяется, не забанило ли сообщество юзера,
+		// но как минимум, мы разрешаем юзеру сюда писать.
+		if currentUserID < 0 { // Дублирующая проверка на всякий случай
+			r.Reject(c, 100, "Communities cannot send messages to other communities")
+			return
+		}
+
+	case peerID > 0:
+		// ПОЛУЧАТЕЛЬ: ПОЛЬЗОВАТЕЛЬ (личка)
+
+		// Если пишет СООБЩЕСТВО пользователю
+		if currentUserID < 0 {
+			conv, err := chat.GetConversation(dbx.Instance, internalChatID)
+			if err != nil {
+				r.Reject(c, 10, "Internal server error")
+				return
+			}
+			if conv == nil {
+				r.Reject(c, 901, "Can't send messages for users without permission")
+				return
+			}
+		}
+
+	default:
+		r.Reject(c, 100, "Invalid peer_id")
+		return
 	}
 
 	// ------------------------------------------------
 
 	var finalLocalID uint64
 	err = dbx.Instance.Transaction(func(tx *gorm.DB) error {
-		localID, err := chat.NextLocalID(tx, peerID, currentUserID)
+		localID, err := chat.NextLocalID(tx, internalChatID, currentUserID)
 		if err != nil {
 			return err
 		}
 		finalLocalID = localID
 
 		if peerID < 2000000000 {
-			var member db_models.ConversationMember
-			res := tx.Where("peer_id = ? AND user_id = ?", peerID, currentUserID).First(&member)
-			if res.Error == gorm.ErrRecordNotFound {
-				tx.Create(&db_models.ConversationMember{
-					PeerID:   peerID,
-					UserID:   currentUserID,
-					JoinedAt: time.Now(),
-					IsAdmin:  true,
-				})
+			tx.FirstOrCreate(&db_models.ConversationMember{
+				InternalChatID: internalChatID,
+				PeerID:         peerID,
+				UserID:         currentUserID,
+				JoinedAt:       time.Now(),
+				IsAdmin:        true,
+			})
 
-				if peerID != currentUserID {
-					tx.Create(&db_models.ConversationMember{
-						PeerID:   peerID,
-						UserID:   peerID,
-						JoinedAt: time.Now(),
-					})
-				}
+			if peerID != currentUserID {
+				tx.FirstOrCreate(&db_models.ConversationMember{
+					InternalChatID: internalChatID,
+					PeerID:         currentUserID,
+					UserID:         peerID,
+					JoinedAt:       time.Now(),
+				})
 			}
 		}
 
 		newMessage := db_models.Message{
-			PeerID:          peerID,
+			ChatID:          internalChatID,
 			LocalID:         localID,
 			FromID:          currentUserID,
 			Text:            db_models.EncryptedJSON(message),
@@ -175,7 +200,7 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 		}
 
 		if message != "" {
-			indexes := r.SearchRepo.GenerateBlindIndexes(newMessage.ID, peerID, message)
+			indexes := r.SearchRepo.GenerateBlindIndexes(newMessage.ID, internalChatID, message)
 			if len(indexes) > 0 {
 				if err := tx.Create(&indexes).Error; err != nil {
 					return err
@@ -187,7 +212,14 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 	})
 
 	if err != nil {
-		r.Reject(c, 10, "Internal server error during saving")
+		switch err {
+		case chat.ErrGroupNoPermission:
+			r.Reject(c, 901, "Can't send messages for users without permission")
+		case chat.ErrChatNotFound:
+			r.Reject(c, 917, "Chat not found or access denied")
+		default:
+			r.Reject(c, 10, "Internal server error: "+err.Error())
+		}
 		return
 	}
 

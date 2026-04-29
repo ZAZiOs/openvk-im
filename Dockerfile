@@ -22,6 +22,8 @@ WORKDIR /root/
 
 COPY --from=builder /ovk-im-server .
 
+COPY .env .env
+
 EXPOSE 8080
 
 CMD ["./ovk-im-server"]

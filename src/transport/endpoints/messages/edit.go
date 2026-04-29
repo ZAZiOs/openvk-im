@@ -4,6 +4,7 @@ import (
 	"net/http"
 	dbx "ovk-im/src/db"
 	db_models "ovk-im/src/models/db"
+	"ovk-im/src/repo/chat"
 	"ovk-im/src/transport/endpoints/core"
 	"strconv"
 	"time"
@@ -30,8 +31,10 @@ func Edit(c *gin.Context, r *core.BaseHandler) {
 		return
 	}
 
+	chatID := chat.GetInternalChatID(peerID, currentUserID)
+
 	var msg db_models.Message
-	err := dbx.Instance.Where("chat_id = ? AND local_id = ?", peerID, messageID).First(&msg).Error
+	err := dbx.Instance.Where("chat_id = ? AND local_id = ?", chatID, messageID).First(&msg).Error
 	if err != nil {
 		r.Reject(c, 910, "Can't edit this message, maybe it has been deleted")
 		return
@@ -51,28 +54,23 @@ func Edit(c *gin.Context, r *core.BaseHandler) {
 
 	updates := make(map[string]interface{})
 
+	finalText := string(msg.Text)
 	if textExists {
+		finalText = newMessageText
 		updates["text"] = db_models.EncryptedJSON(newMessageText)
 	}
 
+	finalAttach := string(msg.Attachments)
 	if attachExists {
 		if newAttachment != "" && !core.IsValidAttachments(newAttachment) {
 			r.Reject(c, 100, "Invalid attachment format")
 			return
 		}
+		finalAttach = newAttachment
 		updates["attachments"] = db_models.EncryptedJSON(newAttachment)
 	}
 
-	finalText := msg.Text
-	if textExists {
-		finalText = db_models.EncryptedJSON(newMessageText)
-	}
-	finalAttach := msg.Attachments
-	if attachExists {
-		finalAttach = db_models.EncryptedJSON(newAttachment)
-	}
-
-	if len(finalText) == 0 && len(finalAttach) == 0 {
+	if len(finalText) == 0 && (finalAttach == "" || finalAttach == "[]") {
 		r.Reject(c, 100, "Empty messages are not allowed")
 		return
 	}
@@ -92,7 +90,7 @@ func Edit(c *gin.Context, r *core.BaseHandler) {
 		if textExists {
 			tx.Where("message_id = ?", msg.ID).Delete(&db_models.MessageSearchIndex{})
 
-			indexes := r.SearchRepo.GenerateBlindIndexes(msg.ID, peerID, newMessageText)
+			indexes := r.SearchRepo.GenerateBlindIndexes(msg.ID, chatID, newMessageText)
 			if len(indexes) > 0 {
 				if err := tx.Create(&indexes).Error; err != nil {
 					return err
@@ -107,16 +105,7 @@ func Edit(c *gin.Context, r *core.BaseHandler) {
 		return
 	}
 
-	eventText := string(msg.Text)
-	if textExists {
-		eventText = newMessageText
-	}
-	eventAttach := string(msg.Attachments)
-	if attachExists {
-		eventAttach = newAttachment
-	}
-
-	r.SendUpdateEvent(peerID, messageID, eventText, eventAttach, currentUserID)
+	r.SendUpdateEvent(peerID, messageID, finalText, finalAttach, currentUserID)
 
 	c.JSON(http.StatusOK, gin.H{
 		"response": 1,

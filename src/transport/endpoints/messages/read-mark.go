@@ -27,54 +27,49 @@ func MarkAsRead(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	if peerID != 0 && startID != 0 {
-		if err := chat.MarkAsRead(db.Instance, peerID, currentUserID, startID); err == nil {
+		chatID := chat.GetInternalChatID(peerID, currentUserID)
+		if err := chat.MarkAsRead(db.Instance, chatID, currentUserID, startID); err == nil {
 			r.BroadcastMarkAsRead(c, peerID, currentUserID, startID)
 		}
 	}
 
 	if idsStr != "" {
 		parts := strings.Split(idsStr, ",")
-		var maxID uint64
-		var foundPeerID int64
+
+		type markTask struct {
+			maxLocalID uint64
+			pID        int64
+		}
+		tasks := make(map[string]*markTask)
 
 		for _, p := range parts {
 			if id, err := strconv.ParseUint(strings.TrimSpace(p), 10, 64); err == nil {
-				if peerID == 0 {
-					var msg db_models.Message
-					db.Instance.Select("peer_id", "local_id").Where("id = ?", id).First(&msg)
-					foundPeerID = msg.PeerID
-					if msg.LocalID > maxID {
-						maxID = msg.LocalID
-					}
-				} else {
-					foundPeerID = peerID
-					var msg db_models.Message
-					db.Instance.Select("local_id").Where("id = ? AND peer_id = ?", id, peerID).First(&msg)
-					if msg.LocalID > maxID {
-						maxID = msg.LocalID
+				var msg db_models.Message
+				if err := db.Instance.Select("chat_id", "local_id").Where("id = ?", id).First(&msg).Error; err == nil {
+					if tasks[msg.ChatID] == nil {
+						tasks[msg.ChatID] = &markTask{
+							maxLocalID: msg.LocalID,
+							pID:        chat.DerivePeerID(msg.ChatID, currentUserID),
+						}
+					} else if msg.LocalID > tasks[msg.ChatID].maxLocalID {
+						tasks[msg.ChatID].maxLocalID = msg.LocalID
 					}
 				}
 			}
 		}
 
-		if foundPeerID != 0 && maxID != 0 {
-			if err := chat.MarkAsRead(db.Instance, foundPeerID, currentUserID, maxID); err == nil {
-				r.BroadcastMarkAsRead(c, foundPeerID, currentUserID, maxID)
+		for cID, task := range tasks {
+			if err := chat.MarkAsRead(db.Instance, cID, currentUserID, task.maxLocalID); err == nil {
+				r.BroadcastMarkAsRead(c, task.pID, currentUserID, task.maxLocalID)
 			}
 		}
 	}
 
 	if peerID != 0 && startID == 0 && idsStr == "" {
-		conv, _ := chat.GetConversation(db.Instance, peerID)
+		chatID := chat.GetInternalChatID(peerID, currentUserID)
+		conv, _ := chat.GetConversation(db.Instance, chatID)
 		if conv != nil {
-			chat.MarkAsRead(db.Instance, peerID, currentUserID, conv.LastMessageID)
-		}
-	}
-
-	if peerID != 0 && startID == 0 && idsStr == "" {
-		conv, _ := chat.GetConversation(db.Instance, peerID)
-		if conv != nil {
-			if err := chat.MarkAsRead(db.Instance, peerID, currentUserID, conv.LastMessageID); err == nil {
+			if err := chat.MarkAsRead(db.Instance, chatID, currentUserID, conv.LastMessageID); err == nil {
 				r.BroadcastMarkAsRead(c, peerID, currentUserID, conv.LastMessageID)
 			}
 		}

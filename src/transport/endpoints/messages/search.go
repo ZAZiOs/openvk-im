@@ -7,6 +7,7 @@ import (
 
 	"ovk-im/src/db"
 	db_models "ovk-im/src/models/db"
+	"ovk-im/src/repo/chat"
 	"ovk-im/src/transport/endpoints/core"
 
 	"github.com/gin-gonic/gin"
@@ -62,20 +63,22 @@ func Search(c *gin.Context, r *core.BaseHandler) {
 	var err error
 
 	if peerID != 0 {
-		messageIDs, err = r.SearchRepo.SearchMessages(peerID, q)
+		chatID := chat.GetInternalChatID(peerID, currentUserID)
+		messageIDs, err = r.SearchRepo.SearchMessages(chatID, q)
 	} else {
-		var accessibleChatIDs []int64
+		var myChatIDs []string
 		db.Instance.Model(&db_models.ConversationMember{}).
 			Where("user_id = ?", currentUserID).
-			Pluck("peer_id", &accessibleChatIDs)
+			Pluck("internal_chat_id", &myChatIDs)
 
-		if len(accessibleChatIDs) == 0 {
+		if len(myChatIDs) == 0 {
 			c.JSON(http.StatusOK, gin.H{"response": gin.H{"count": 0, "items": []interface{}{}}})
 			return
 		}
+
 		err = db.Instance.Model(&db_models.MessageSearchIndex{}).
 			Select("message_id").
-			Where("peer_id IN ? AND word_hash IN ?", accessibleChatIDs, r.SearchRepo.PrepareHashes(q)).
+			Where("chat_id IN ? AND word_hash IN ?", myChatIDs, r.SearchRepo.PrepareHashes(q)).
 			Group("message_id").
 			Having("COUNT(DISTINCT word_hash) = ?", r.SearchRepo.WordsCount(q)).
 			Pluck("message_id", &messageIDs).Error
@@ -107,10 +110,11 @@ func Search(c *gin.Context, r *core.BaseHandler) {
 
 	responseItems := make([]db_models.VKApiMessage, len(msgs))
 	for i, m := range msgs {
-		v := m.ToVKApiStruct(db.Instance, 0, currentUserID)
+		msgPeerID := chat.DerivePeerID(m.ChatID, currentUserID)
+		v := m.ToVKApiStruct(db.Instance, 0, currentUserID, msgPeerID)
 
 		if previewLen > 0 && len(v.Text) > previewLen {
-			v.Text = v.Text[:previewLen] + "..."
+			v.Text = v.Text[:previewLen] + "…"
 		}
 		responseItems[i] = v
 
@@ -120,10 +124,10 @@ func Search(c *gin.Context, r *core.BaseHandler) {
 			} else if m.FromID < 0 {
 				groupIDsMap[-m.FromID] = true
 			}
-			if m.PeerID > 0 && m.PeerID < 2000000000 {
-				userIDsMap[m.PeerID] = true
-			} else if m.PeerID < 0 {
-				groupIDsMap[-m.PeerID] = true
+			if msgPeerID > 0 && msgPeerID < 2000000000 {
+				userIDsMap[msgPeerID] = true
+			} else if msgPeerID < 0 {
+				groupIDsMap[-msgPeerID] = true
 			}
 
 			if m.ActionMid != 0 {

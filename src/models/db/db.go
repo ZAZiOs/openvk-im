@@ -14,8 +14,9 @@ const (
 )
 
 type Conversation struct {
-	ID     uint64 `gorm:"primaryKey;autoIncrement" json:"-"`
-	PeerID int64  `gorm:"uniqueIndex" json:"peer_id"`
+	ID         uint64 `gorm:"primaryKey;autoIncrement" json:"-"`
+	PeerID     int64  `gorm:"uniqueIndex" json:"peer_id"`
+	InternalID string `gorm:"primaryKey;type:varchar(100)" json:"internal_id"`
 
 	PeerType uint8  `gorm:"type:tinyint;default:0;index" json:"peer_type"`
 	Title    string `gorm:"type:varchar(255)" json:"title"`
@@ -33,8 +34,9 @@ type Conversation struct {
 }
 
 type ConversationMember struct {
-	PeerID int64 `gorm:"primaryKey;index:idx_member" json:"peer_id"`
-	UserID int64 `gorm:"primaryKey;index:idx_member" json:"user_id"`
+	PeerID         int64  `gorm:"primaryKey;index:idx_member" json:"peer_id"`
+	UserID         int64  `gorm:"primaryKey;index:idx_member" json:"user_id"`
+	InternalChatID string `gorm:"primaryKey;index;type:varchar(100)"`
 
 	StartMessageID uint64 `json:"start_message_id"`
 	LastReadID     uint64 `json:"last_read_id"`
@@ -47,7 +49,7 @@ type ConversationMember struct {
 	LeftAt    *time.Time `gorm:"precision:3" json:"left_at"`
 	JoinCode  *string    `gorm:"type:varchar(191)" json:"join_code"`
 
-	Conversation Conversation `gorm:"foreignKey:PeerID;references:PeerID" json:"-"`
+	Conversation Conversation `gorm:"foreignKey:InternalChatID;references:InternalID" json:"-"`
 }
 
 type ChatInvite struct {
@@ -80,7 +82,7 @@ chat_invite_user_by_link
 
 type Message struct {
 	ID       uint64 `gorm:"primaryKey;autoIncrement" json:"id"`
-	PeerID   int64  `gorm:"index" json:"peer_id"`
+	ChatID   string `gorm:"index:idx_chat_local;type:varchar(100)" json:"chat_id"`
 	LocalID  uint64 `json:"local_id"`
 	RandomID int64  `gorm:"index" json:"random_id"` // Дедупликация
 
@@ -108,7 +110,7 @@ type Message struct {
 
 type MessageSearchIndex struct {
 	MessageID uint64 `gorm:"primaryKey;index:idx_search_word"`
-	PeerID    int64  `gorm:"index:idx_search_word"`
+	ChatID    string `gorm:"index:idx_search_word;type:varchar(100)"`
 	WordHash  []byte `gorm:"primaryKey;type:binary(32);index:idx_search_word"`
 }
 
@@ -141,11 +143,11 @@ type VKApiMessage struct {
 	Action          interface{}    `json:"action,omitempty"`
 }
 
-func (m *Message) ToVKApiStruct(tx *gorm.DB, depth int, currentUserID int64) VKApiMessage {
+func (m *Message) ToVKApiStruct(tx *gorm.DB, depth int, currentUserID int64, requestedPeerID int64) VKApiMessage {
 	vkMsg := VKApiMessage{
 		ID:          m.LocalID,
 		Date:        m.CreatedAt.Unix(),
-		PeerID:      m.PeerID,
+		PeerID:      requestedPeerID,
 		FromID:      m.FromID,
 		Text:        string(m.Text),
 		RandomID:    m.RandomID,
@@ -186,9 +188,9 @@ func (m *Message) ToVKApiStruct(tx *gorm.DB, depth int, currentUserID int64) VKA
 
 	if m.ReplyTo != nil && *m.ReplyTo > 0 && depth > 0 {
 		var replyMsg Message
-		err := tx.Where("peer_id = ? AND local_id = ?", m.PeerID, *m.ReplyTo).First(&replyMsg).Error
+		err := tx.Where("chat_id = ? AND local_id = ?", m.ChatID, *m.ReplyTo).First(&replyMsg).Error
 		if err == nil {
-			rm := replyMsg.ToVKApiStruct(tx, depth-1, currentUserID)
+			rm := replyMsg.ToVKApiStruct(tx, depth-1, currentUserID, requestedPeerID)
 			vkMsg.ReplyMessage = &rm
 		}
 	}
@@ -196,10 +198,10 @@ func (m *Message) ToVKApiStruct(tx *gorm.DB, depth int, currentUserID int64) VKA
 	if m.ForwardMessages != "" && depth > 0 {
 		ids := strings.Split(m.ForwardMessages, ",")
 		var fwdMsgs []Message
-		tx.Where("peer_id = ? AND local_id IN ?", m.PeerID, ids).Find(&fwdMsgs)
+		tx.Where("chat_id = ? AND local_id IN ?", m.ChatID, ids).Find(&fwdMsgs)
 
 		for _, f := range fwdMsgs {
-			vkMsg.ForwardMessages = append(vkMsg.ForwardMessages, f.ToVKApiStruct(tx, depth-1, currentUserID))
+			vkMsg.ForwardMessages = append(vkMsg.ForwardMessages, f.ToVKApiStruct(tx, depth-1, currentUserID, requestedPeerID))
 		}
 	}
 
@@ -271,29 +273,28 @@ func (c *Conversation) ToVKApiStruct(tx *gorm.DB, currentUserID int64, member *C
 
 	if member != nil {
 		conv.InRead = member.LastReadID
+		conv.CanWrite = VKCanWrite{
+			Allowed: member.LeftAt == nil,
+		}
+	} else {
+		conv.CanWrite = VKCanWrite{
+			Allowed: false,
+			Reason:  917,
+		}
 	}
 
-	conv.CanWrite = VKCanWrite{
-		Allowed: member != nil && member.LeftAt == nil,
-	}
-	if !conv.CanWrite.Allowed {
-		conv.CanWrite.Reason = 917
-	}
-
-	var count int64
+	var unreadCount int64
 	tx.Model(&Message{}).
-		Where("peer_id = ? AND local_id > ? AND from_id != ?", c.PeerID, c.InReadID, currentUserID).
-		Count(&count)
-	conv.UnreadCount = int(count)
+		Where("chat_id = ? AND local_id > ? AND from_id != ?", c.InternalID, conv.InRead, currentUserID).
+		Count(&unreadCount)
+	conv.UnreadCount = int(unreadCount)
 
 	if peerType == "chat" {
 		settings := VKChatSettings{
 			Title: c.Title,
 		}
 
-		if member == nil {
-			settings.State = "left"
-		} else if member.LeftAt != nil {
+		if member == nil || member.LeftAt != nil {
 			settings.State = "left"
 		} else {
 			settings.State = "in"
@@ -311,18 +312,14 @@ func (c *Conversation) ToVKApiStruct(tx *gorm.DB, currentUserID int64, member *C
 
 		if c.PinnedMsgID > 0 {
 			var pMsg Message
-			if err := tx.Where("peer_id = ? AND local_id = ?", c.PeerID, c.PinnedMsgID).First(&pMsg).Error; err == nil {
-				res := pMsg.ToVKApiStruct(tx, 0, currentUserID)
+			if err := tx.Where("chat_id = ? AND local_id = ?", c.InternalID, c.PinnedMsgID).First(&pMsg).Error; err == nil {
+				res := pMsg.ToVKApiStruct(tx, 0, currentUserID, c.PeerID)
 				settings.PinnedMessage = res
 			}
 		}
 
 		conv.ChatSettings = &settings
 	}
-
-	var unread int64
-	tx.Model(&Message{}).Where("peer_id = ? AND local_id > ? AND from_id != ?", c.PeerID, conv.InRead, currentUserID).Count(&unread)
-	conv.UnreadCount = int(unread)
 
 	return conv
 }

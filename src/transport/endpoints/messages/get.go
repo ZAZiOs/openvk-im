@@ -4,6 +4,7 @@ import (
 	"net/http"
 	dbx "ovk-im/src/db"
 	db_models "ovk-im/src/models/db"
+	"ovk-im/src/repo/chat"
 	"ovk-im/src/transport/endpoints/core"
 	"strconv"
 	"strings"
@@ -35,8 +36,8 @@ func GetByID(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	var dbMessages []db_models.Message
-	err := dbx.Instance.Where("id IN ? AND (from_id = ? OR peer_id IN (SELECT peer_id FROM conversation_members WHERE user_id = ?))",
-		ids, currentUserID, currentUserID).Find(&dbMessages).Error
+	err := dbx.Instance.Where("id IN ? AND chat_id IN (SELECT internal_chat_id FROM conversation_members WHERE user_id = ? AND left_at IS NULL)",
+		ids, currentUserID).Find(&dbMessages).Error
 
 	if err != nil {
 		r.Reject(c, 10, "Internal server error")
@@ -45,7 +46,8 @@ func GetByID(c *gin.Context, r *core.BaseHandler) {
 
 	items := make([]db_models.VKApiMessage, 0)
 	for _, m := range dbMessages {
-		items = append(items, m.ToVKApiStruct(dbx.Instance, 5, currentUserID))
+		mPeerID := chat.DerivePeerID(m.ChatID, currentUserID)
+		items = append(items, m.ToVKApiStruct(dbx.Instance, 5, currentUserID, mPeerID))
 	}
 
 	response := gin.H{
@@ -81,6 +83,13 @@ func GetByConversationMessageID(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	peerID, _ := strconv.ParseInt(peerIDStr, 10, 64)
+	chatID := chat.GetInternalChatID(peerID, currentUserID)
+
+	inChat, _ := chat.IsUserInChat(dbx.Instance, chatID, currentUserID)
+	if !inChat {
+		r.Reject(c, 917, "Access denied")
+		return
+	}
 
 	idStrings := strings.Split(cmidsStr, ",")
 	var localIDs []uint64
@@ -91,7 +100,7 @@ func GetByConversationMessageID(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	var dbMessages []db_models.Message
-	err := dbx.Instance.Where("peer_id = ? AND local_id IN ?", peerID, localIDs).Find(&dbMessages).Error
+	err := dbx.Instance.Where("chat_id = ? AND local_id IN ?", chatID, localIDs).Find(&dbMessages).Error
 
 	if err != nil {
 		r.Reject(c, 10, "Internal server error")
@@ -100,7 +109,7 @@ func GetByConversationMessageID(c *gin.Context, r *core.BaseHandler) {
 
 	items := make([]db_models.VKApiMessage, 0)
 	for _, m := range dbMessages {
-		items = append(items, m.ToVKApiStruct(dbx.Instance, 5, currentUserID))
+		items = append(items, m.ToVKApiStruct(dbx.Instance, 5, currentUserID, peerID))
 	}
 
 	response := gin.H{

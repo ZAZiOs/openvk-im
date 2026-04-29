@@ -5,6 +5,7 @@ import (
 	"ovk-im/src/db"
 	db_models "ovk-im/src/models/db"
 	lp_models "ovk-im/src/models/longpoll"
+	"ovk-im/src/repo/chat"
 	"ovk-im/src/transport/endpoints/core"
 	"strconv"
 	"strings"
@@ -34,36 +35,31 @@ func MarkAsImportant(c *gin.Context, r *core.BaseHandler) {
 		}
 	}
 
-	type MsgInfo struct {
-		ID     uint64
-		PeerID int64
-	}
+	var messages []db_models.Message
+	db.Instance.Where("id IN ?", ids).Find(&messages)
 
-	var results []MsgInfo
-	db.Instance.Table("messages").
-		Select("messages.id, conversations.peer_id").
-		Joins("left join conversations on conversations.peer_id = messages.peer_id").
-		Where("messages.id IN ?", ids).
-		Scan(&results)
+	for _, m := range messages {
+		mPeerID := chat.DerivePeerID(m.ChatID, currentUserID)
 
-	for _, res := range results {
 		if important == 1 {
 			db.Instance.Clauses(clause.OnConflict{DoNothing: true}).Create(&db_models.ImportantMessage{
 				UserID:    currentUserID,
-				MessageID: res.ID,
+				MessageID: m.ID,
 				CreatedAt: time.Now(),
 			})
+
 			r.LPRepo.PushEvent(c.Request.Context(), currentUserID, "msg_set_flags", lp_models.MsgSetFlagsEvent{
-				MessageID: res.ID,
+				MessageID: m.ID,
 				Mask:      lp_models.MessageFlags{Value: lp_models.FlagImportant},
-				PeerID:    res.PeerID,
+				PeerID:    mPeerID,
 			})
 		} else {
-			db.Instance.Where("user_id = ? AND message_id = ?", currentUserID, res.ID).Delete(&db_models.ImportantMessage{})
+			db.Instance.Where("user_id = ? AND message_id = ?", currentUserID, m.ID).Delete(&db_models.ImportantMessage{})
+
 			r.LPRepo.PushEvent(c.Request.Context(), currentUserID, "msg_reset_flags", lp_models.MsgResetFlagsEvent{
-				MessageID: res.ID,
+				MessageID: m.ID,
 				Mask:      lp_models.MessageFlags{Value: lp_models.FlagImportant},
-				PeerID:    res.PeerID,
+				PeerID:    mPeerID,
 			})
 		}
 	}
@@ -101,16 +97,13 @@ func GetImportantMessages(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	responseItems := make([]db_models.VKApiMessage, len(msgs))
-	userIDsMap := make(map[int64]bool)
 
 	for i, m := range msgs {
-		v := m.ToVKApiStruct(db.Instance, 0, currentUserID)
+		mPeerID := chat.DerivePeerID(m.ChatID, currentUserID)
+
+		v := m.ToVKApiStruct(db.Instance, 0, currentUserID, mPeerID)
 		v.Important = true
 		responseItems[i] = v
-
-		if extended && m.FromID > 0 {
-			userIDsMap[m.FromID] = true
-		}
 	}
 
 	result := gin.H{
@@ -119,11 +112,11 @@ func GetImportantMessages(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	if extended {
-		uIDs := []int64{}
-		for id := range userIDsMap {
-			uIDs = append(uIDs, id)
-		}
-		result["profiles"] = uIDs
+		var userIDs []int64
+		var groupIDs []int64
+		collectAllEntityIDs(responseItems, &userIDs, &groupIDs)
+		result["profiles"] = userIDs
+		result["groups"] = groupIDs
 	}
 
 	c.JSON(http.StatusOK, gin.H{"response": result})

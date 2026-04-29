@@ -39,8 +39,10 @@ func GetHistoryAttachments(c *gin.Context, r *core.BaseHandler) {
 		return
 	}
 
+	chatID := chat.GetInternalChatID(peerID, currentUserID)
+
 	if peerID > 2000000000 {
-		inChat, _ := chat.IsUserInChat(nil, peerID, currentUserID)
+		inChat, _ := chat.IsUserInChat(nil, chatID, currentUserID)
 		if !inChat {
 			r.Reject(c, 917, "You don't have access to this chat")
 			return
@@ -57,22 +59,30 @@ func GetHistoryAttachments(c *gin.Context, r *core.BaseHandler) {
 	offset, _ := strconv.Atoi(startFrom)
 
 	var msgs []db_models.Message
-	query := db.Instance.Where("peer_id = ? AND attachments != '[]'", peerID)
+
+	query := db.Instance.Where("chat_id = ? AND attachments != '[]' AND attachments IS NOT NULL", chatID)
 
 	order := "local_id DESC"
 	if c.Query("preserve_order") == "1" {
 		order = "local_id ASC"
 	}
 
-	err := query.Order(order).Limit(count).Offset(offset).Find(&msgs).Error
+	fetchLimit := count * 5
+	if fetchLimit > 500 {
+		fetchLimit = 500
+	}
+
+	err := query.Order(order).Limit(fetchLimit).Offset(offset).Find(&msgs).Error
 	if err != nil {
 		r.Reject(c, 10, "Internal server error")
 		return
 	}
 
 	var historyItems []db_models.VKApiHistoryAttachment
+	messagesProcessed := 0
 
 	for _, m := range msgs {
+		messagesProcessed++
 		var attachments []map[string]interface{}
 		if err := m.Attachments.Unmarshal(&attachments); err != nil {
 			continue
@@ -93,8 +103,11 @@ func GetHistoryAttachments(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	nextFrom := ""
-	if len(msgs) >= count {
-		nextFrom = strconv.Itoa(offset + len(msgs))
+	if len(msgs) > 0 && messagesProcessed > 0 {
+		nextFrom = strconv.Itoa(offset + messagesProcessed)
+	}
+	if len(msgs) < fetchLimit && len(historyItems) < count {
+		nextFrom = ""
 	}
 
 	c.JSON(http.StatusOK, gin.H{

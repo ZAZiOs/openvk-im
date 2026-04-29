@@ -27,6 +27,8 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 		peerID = 2000000000 + id
 	}
 
+	chatID := chat.GetInternalChatID(peerID, currentUserID)
+
 	if peerID == 0 {
 		r.Reject(c, 100, "One of the parameters is missing: peer_id, user_id or chat_id")
 		return
@@ -40,7 +42,7 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 	rev, _ := strconv.Atoi(c.DefaultQuery("rev", "0")) // 0 - desc, 1 - asc
 
 	if peerID > 2000000000 {
-		inChat, err := chat.IsUserInChat(nil, peerID, currentUserID)
+		inChat, err := chat.IsUserInChat(nil, chatID, currentUserID)
 		if err != nil || !inChat {
 			r.Reject(c, 917, "You don't have access to this chat")
 			return
@@ -48,7 +50,7 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	var msgs []db_models.Message
-	query := db.Instance.Where("peer_id = ?", peerID)
+	query := db.Instance.Where("chat_id = ?", chatID)
 
 	order := "local_id DESC"
 	if rev == 1 {
@@ -62,18 +64,26 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	var totalCount int64
-	db.Instance.Model(&db_models.Message{}).Where("peer_id = ?", peerID).Count(&totalCount)
+	db.Instance.Model(&db_models.Message{}).Where("chat_id = ?", chatID).Count(&totalCount)
 
 	responseItems := make([]db_models.VKApiMessage, len(msgs))
 	for i, m := range msgs {
-		responseItems[i] = m.ToVKApiStruct(db.Instance, 1, currentUserID)
+		responseItems[i] = m.ToVKApiStruct(db.Instance, 1, currentUserID, peerID)
+	}
+
+	member, _ := chat.GetMember(db.Instance, chatID, currentUserID)
+	var unreadCount int64
+	if member != nil {
+		db.Instance.Model(&db_models.Message{}).
+			Where("chat_id = ? AND local_id > ? AND from_id != ?", chatID, member.LastReadID, currentUserID).
+			Count(&unreadCount)
 	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"response": gin.H{
 			"count":  totalCount,
 			"items":  responseItems,
-			"unread": 0,
+			"unread": unreadCount,
 		},
 	})
 }
