@@ -114,7 +114,7 @@ func GetImportantMessages(c *gin.Context, r *core.BaseHandler) {
 	if extended {
 		var userIDs []int64
 		var groupIDs []int64
-		collectAllEntityIDs(responseItems, &userIDs, &groupIDs)
+		core.CollectAllEntityIDs(responseItems, &userIDs, &groupIDs)
 		result["profiles"] = userIDs
 		result["groups"] = groupIDs
 	}

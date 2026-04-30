@@ -59,7 +59,7 @@ func GetByID(c *gin.Context, r *core.BaseHandler) {
 		var userIDs []int64
 		var groupIDs []int64
 
-		collectAllEntityIDs(items, &userIDs, &groupIDs)
+		core.CollectAllEntityIDs(items, &userIDs, &groupIDs)
 
 		response["profiles"] = userIDs
 		response["groups"] = groupIDs
@@ -121,7 +121,7 @@ func GetByConversationMessageID(c *gin.Context, r *core.BaseHandler) {
 		var userIDs []int64
 		var groupIDs []int64
 
-		collectAllEntityIDs(items, &userIDs, &groupIDs)
+		core.CollectAllEntityIDs(items, &userIDs, &groupIDs)
 
 		response["profiles"] = userIDs
 		response["groups"] = groupIDs
@@ -130,37 +130,4 @@ func GetByConversationMessageID(c *gin.Context, r *core.BaseHandler) {
 	c.JSON(http.StatusOK, gin.H{
 		"response": response,
 	})
-}
-
-func collectAllEntityIDs(items []db_models.VKApiMessage, userIDs *[]int64, groupIDs *[]int64) {
-	uMap := make(map[int64]struct{})
-	gMap := make(map[int64]struct{})
-
-	var scan func(m db_models.VKApiMessage)
-	scan = func(m db_models.VKApiMessage) {
-		if m.FromID > 0 {
-			uMap[m.FromID] = struct{}{}
-		} else if m.FromID < 0 {
-			gMap[-m.FromID] = struct{}{}
-		}
-
-		if m.ReplyMessage != nil {
-			scan(*m.ReplyMessage)
-		}
-
-		for _, fwd := range m.ForwardMessages {
-			scan(fwd)
-		}
-	}
-
-	for _, itm := range items {
-		scan(itm)
-	}
-
-	for id := range uMap {
-		*userIDs = append(*userIDs, id)
-	}
-	for id := range gMap {
-		*groupIDs = append(*groupIDs, id)
-	}
 }

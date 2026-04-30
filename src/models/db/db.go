@@ -15,7 +15,7 @@ const (
 
 type Conversation struct {
 	ID         uint64 `gorm:"primaryKey;autoIncrement" json:"-"`
-	PeerID     int64  `gorm:"uniqueIndex" json:"peer_id"`
+	PeerID     int64  `gorm:"index" json:"peer_id"`
 	InternalID string `gorm:"primaryKey;type:varchar(100)" json:"internal_id"`
 
 	PeerType uint8  `gorm:"type:tinyint;default:0;index" json:"peer_type"`

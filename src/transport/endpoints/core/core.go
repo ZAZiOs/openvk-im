@@ -202,3 +202,42 @@ func (r *BaseHandler) SendUpdateEvent(peerID int64, localID uint64, text string,
 		r.Broadcaster.Notify(uid)
 	}
 }
+
+func CollectAllEntityIDs(items []db_models.VKApiMessage, userIDs *[]int64, groupIDs *[]int64) {
+	uMap := make(map[int64]struct{})
+	gMap := make(map[int64]struct{})
+
+	var scan func(m db_models.VKApiMessage)
+	scan = func(m db_models.VKApiMessage) {
+		if m.FromID > 0 {
+			uMap[m.FromID] = struct{}{}
+		} else if m.FromID < 0 {
+			gMap[-m.FromID] = struct{}{}
+		}
+
+		if m.PeerID > 0 && m.PeerID < 2000000000 {
+			uMap[m.PeerID] = struct{}{}
+		} else if m.PeerID < 0 {
+			gMap[-m.PeerID] = struct{}{}
+		}
+
+		if m.ReplyMessage != nil {
+			scan(*m.ReplyMessage)
+		}
+
+		for _, fwd := range m.ForwardMessages {
+			scan(fwd)
+		}
+	}
+
+	for _, itm := range items {
+		scan(itm)
+	}
+
+	for id := range uMap {
+		*userIDs = append(*userIDs, id)
+	}
+	for id := range gMap {
+		*groupIDs = append(*groupIDs, id)
+	}
+}

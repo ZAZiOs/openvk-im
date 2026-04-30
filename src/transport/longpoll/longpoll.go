@@ -20,7 +20,22 @@ func LongPollHandler(
 	b *broadcaster.Broadcaster,
 	lpRepo *longpoll.Repo,
 ) {
+	if r.URL.Query().Get("health") != "" {
+		w.Header().Set("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+		return
+	}
+
 	key := r.URL.Query().Get("key")
+
+	if key == "" {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(lp_models.Envelope{
+			Failed: 2,
+		})
+		return
+	}
 
 	tsStr := r.URL.Query().Get("ts")
 	modeStr := r.URL.Query().Get("mode")

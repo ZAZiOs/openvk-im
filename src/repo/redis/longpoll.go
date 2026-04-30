@@ -72,14 +72,19 @@ type StoredEvent struct {
 }
 
 func (r *Repo) GetUserIDByKey(ctx context.Context, key string) (int64, error) {
+	if key == "" {
+		return 0, errors.New("empty key")
+	}
+
 	val, err := r.Client.Get(ctx, "im:lp:key:"+key).Result()
 	if err == redis.Nil {
 		return 0, ErrKeyNotFound
 	}
+	userID, err := strconv.ParseInt(val, 10, 64)
 	if err != nil {
 		return 0, err
 	}
-	return strconv.ParseInt(val, 10, 64)
+	return userID, nil
 }
 
 func (r *Repo) GetUserTS(ctx context.Context, userID int64) (uint64, error) {

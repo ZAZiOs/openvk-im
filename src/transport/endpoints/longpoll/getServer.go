@@ -36,7 +36,7 @@ func GetLongPollServer(c *gin.Context, r *core.BaseHandler) {
 	c.JSON(http.StatusOK, gin.H{
 		"response": gin.H{
 			"key":    lpKey,
-			"server": "%DOMAIN%/nim",
+			"server": "%REPLACE_THIS%",
 			"ts":     ts,
 			"pts":    pts,
 		},

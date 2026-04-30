@@ -65,7 +65,7 @@ func (r *Router) BasicHandler(c *gin.Context) {
 		"messages.markAsRead":                 messages.MarkAsRead,
 		"messages.delete":                     messages.Delete,
 		"messages.restore":                    messages.Restore,
-		"messages.getByID":                    messages.GetByID,
+		"messages.getById":                    messages.GetByID,
 		"messages.getByConversationMessageId": messages.GetByConversationMessageID,
 
 		"messages.getHistory":            history.GetHistory,
