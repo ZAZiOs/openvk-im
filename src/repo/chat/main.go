@@ -182,23 +182,46 @@ func GetInternalChatID(peerID int64, currentUserID int64) string {
 	if peerID > 2000000000 {
 		return "c_" + strconv.FormatInt(peerID, 10)
 	}
-	if peerID < 0 {
-		return "g_" + strconv.FormatInt(peerID, 10)
+	if peerID < 0 || currentUserID < 0 {
+		var groupID, userID int64
+		if peerID < 0 {
+			groupID = peerID
+			userID = currentUserID
+		} else {
+			groupID = currentUserID
+			userID = peerID
+		}
+		return "g" + strconv.FormatInt(groupID, 10) + "_" + strconv.FormatInt(userID, 10)
 	}
 
 	u1, u2 := currentUserID, peerID
 	if u1 > u2 {
 		u1, u2 = u2, u1
 	}
-	return "dm_" + strconv.FormatInt(u1, 10) + "_" + strconv.FormatInt(u2, 10)
+	return "dm" + strconv.FormatInt(u1, 10) + "_" + strconv.FormatInt(u2, 10)
 }
 
 func DerivePeerID(chatID string, currentUserID int64) int64 {
-	if strings.HasPrefix(chatID, "c_") || strings.HasPrefix(chatID, "g_") {
+	if strings.HasPrefix(chatID, "c_") {
 		id, _ := strconv.ParseInt(chatID[2:], 10, 64)
 		return id
 	}
-	if strings.HasPrefix(chatID, "dm_") {
+
+	if strings.HasPrefix(chatID, "g") {
+		parts := strings.Split(chatID[1:], "_")
+		if len(parts) < 2 {
+			return 0
+		}
+		id1, _ := strconv.ParseInt(parts[0], 10, 64)
+		id2, _ := strconv.ParseInt(parts[1], 10, 64)
+
+		if id1 == currentUserID {
+			return id2
+		}
+		return id1
+	}
+
+	if strings.HasPrefix(chatID, "dm") {
 		parts := strings.Split(chatID[3:], "_")
 		id1, _ := strconv.ParseInt(parts[0], 10, 64)
 		id2, _ := strconv.ParseInt(parts[1], 10, 64)

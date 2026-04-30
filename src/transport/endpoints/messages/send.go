@@ -79,7 +79,7 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 		return
 	}
 	randomID, _ := strconv.ParseInt(randomIDStr, 10, 64)
-	redisKey := "rid:" + strconv.FormatInt(currentUserID, 10) + ":" + randomIDStr
+	redisKey := "rid:" + strconv.FormatInt(currentUserID, 10) + ":" + strconv.FormatInt(peerID, 10) + randomIDStr
 
 	oldLocalID, err := r.LPRepo.Client.Get(c.Request.Context(), redisKey).Result()
 	if err == nil && oldLocalID != "" {
@@ -138,12 +138,13 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 
 		// Если пишет СООБЩЕСТВО пользователю
 		if currentUserID < 0 {
-			conv, err := chat.GetConversation(dbx.Instance, internalChatID)
-			if err != nil {
-				r.Reject(c, 10, "Internal server error")
-				return
-			}
-			if conv == nil {
+			var exists bool
+			dbx.Instance.Model(&db_models.Message{}).
+				Select("count(*) > 0").
+				Where("chat_id = ? AND from_id = ?", internalChatID, peerID).
+				Scan(&exists)
+
+			if !exists {
 				r.Reject(c, 901, "Can't send messages for users without permission")
 				return
 			}
