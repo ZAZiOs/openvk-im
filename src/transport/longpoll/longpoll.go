@@ -20,38 +20,51 @@ func LongPollHandler(
 	b *broadcaster.Broadcaster,
 	lpRepo *longpoll.Repo,
 ) {
-	if r.URL.Query().Get("health") != "" {
+	query := r.URL.Query()
+	if query.Get("health") != "" {
 		w.Header().Set("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("OK"))
 		return
 	}
 
-	key := r.URL.Query().Get("key")
+	w.Header().Set("Content-Type", "application/json")
 
+	key := query.Get("key")
 	if key == "" {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(lp_models.Envelope{
-			Failed: 2,
-		})
+		json.NewEncoder(w).Encode(lp_models.Envelope{Failed: 2})
 		return
 	}
 
-	tsStr := r.URL.Query().Get("ts")
-	modeStr := r.URL.Query().Get("mode")
-	versionStr := r.URL.Query().Get("version")
+	ts, err := strconv.ParseUint(query.Get("ts"), 10, 64)
+	if err != nil {
+		json.NewEncoder(w).Encode(lp_models.Envelope{Failed: 1})
+		return
+	}
+	mode, _ := strconv.Atoi(query.Get("mode"))
+	versionStr := query.Get("version")
 
 	if versionStr == "" {
 		versionStr = "2"
 	}
-
-	ts, _ := strconv.ParseUint(tsStr, 10, 64)
-	mode, _ := strconv.Atoi(modeStr)
 	version, _ := strconv.Atoi(versionStr)
+
+	wait, _ := strconv.Atoi(query.Get("wait"))
+	if wait <= 5 {
+		wait = 30
+	} else if wait > 90 {
+		wait = 90
+	}
 
 	config := lp_models.LPConfig{
 		Version: version,
 		Mode:    mode,
+	}
+
+	subjectID, err := lpRepo.GetUserIDByKey(r.Context(), key)
+	if err != nil {
+		json.NewEncoder(w).Encode(lp_models.Envelope{Failed: 2})
+		return
 	}
 
 	packUpdates := func(events []lp_models.VKEvent) []json.RawMessage {
@@ -68,25 +81,10 @@ func LongPollHandler(
 		return res
 	}
 
-	wait, _ := strconv.Atoi(r.URL.Query().Get("wait"))
-	if wait <= 0 || wait > 90 {
-		wait = 25
-	}
+	notify := b.Subscribe(subjectID)
+	defer b.Unsubscribe(subjectID, notify)
 
-	w.Header().Set("Content-Type", "application/json")
-
-	userID, err := lpRepo.GetUserIDByKey(r.Context(), key)
-	if err != nil {
-		json.NewEncoder(w).Encode(lp_models.Envelope{
-			Failed: 2,
-		})
-		return
-	}
-
-	notify := b.Subscribe(userID)
-	defer b.Unsubscribe(userID, notify)
-
-	updates, newTS, err := lpRepo.GetUpdates(r.Context(), userID, ts)
+	updates, newTS, err := lpRepo.GetUpdates(r.Context(), subjectID, ts)
 
 	if err == longpoll.ErrTsTooOld {
 		json.NewEncoder(w).Encode(lp_models.Envelope{
@@ -100,21 +98,21 @@ func LongPollHandler(
 		json.NewEncoder(w).Encode(lp_models.Envelope{
 			TS:      newTS,
 			Updates: packUpdates(updates),
-			PTS:     mapPts(r.Context(), userID, config),
+			PTS:     mapPts(r.Context(), subjectID, config),
 		})
 		return
 	}
 
 	select {
 	case <-notify:
-		freshUpdates, latestTS, _ := lpRepo.GetUpdates(r.Context(), userID, ts)
+		freshUpdates, latestTS, _ := lpRepo.GetUpdates(r.Context(), subjectID, ts)
 		json.NewEncoder(w).Encode(lp_models.Envelope{
 			TS:      latestTS,
 			Updates: packUpdates(freshUpdates),
 		})
 
 	case <-time.After(time.Duration(wait) * time.Second):
-		currentTS, _ := lpRepo.GetUserTS(r.Context(), userID)
+		currentTS, _ := lpRepo.GetUserTS(r.Context(), subjectID)
 		if currentTS == 0 {
 			currentTS = ts
 		}

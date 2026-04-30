@@ -5,6 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"ovk-im/src/transport/endpoints/chats"
 	"ovk-im/src/transport/endpoints/core"
 	"ovk-im/src/transport/endpoints/history"
 	lp_ep "ovk-im/src/transport/endpoints/longpoll"
@@ -70,6 +71,8 @@ func (r *Router) BasicHandler(c *gin.Context) {
 
 		"messages.getHistory":            history.GetHistory,
 		"messages.getHistoryAttachments": history.GetHistoryAttachments,
+
+		"messages.getConversations": chats.GetConversations,
 
 		"messages.getLongPollServer":  lp_ep.GetLongPollServer,
 		"messages.getLongPollHistory": lp_ep.GetLongPollHistory,

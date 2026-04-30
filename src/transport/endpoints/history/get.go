@@ -79,11 +79,20 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 			Count(&unreadCount)
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"response": gin.H{
-			"count":  totalCount,
-			"items":  responseItems,
-			"unread": unreadCount,
-		},
-	})
+	response := gin.H{
+		"count":  totalCount,
+		"items":  responseItems,
+		"unread": unreadCount,
+	}
+
+	if c.Query("extended") == "1" {
+		var userIDs []int64
+		var groupIDs []int64
+		core.CollectAllEntityIDs(responseItems, &userIDs, &groupIDs)
+
+		response["profiles"] = userIDs
+		response["groups"] = groupIDs
+	}
+
+	c.JSON(http.StatusOK, gin.H{"response": response})
 }

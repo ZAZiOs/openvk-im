@@ -95,6 +95,11 @@ func (r *Repo) GetUserTS(ctx context.Context, userID int64) (uint64, error) {
 	return val, err
 }
 
+func (r *Repo) SetUserTS(ctx context.Context, userID int64, ts uint64) error {
+	key := fmt.Sprintf("im:lp:ts:%d", userID)
+	return r.Client.Set(ctx, key, ts, 24*time.Hour).Err()
+}
+
 func (r *Repo) GetUpdates(ctx context.Context, userID int64, lastTS uint64) ([]lp_models.VKEvent, uint64, error) {
 	key := fmt.Sprintf("im:lp:events:%d", userID)
 
