@@ -105,7 +105,7 @@ type Message struct {
 	EditedAt  *time.Time `gorm:"precision:3" json:"edited_at"`
 	DeletedAt *time.Time `gorm:"precision:3" json:"deleted_at"`
 
-	Conversation Conversation `gorm:"foreignKey:PeerID;references:PeerID" json:"-"`
+	Conversation Conversation `gorm:"foreignKey:ChatID;references:InternalID" json:"-"`
 }
 
 type MessageSearchIndex struct {
