@@ -1,6 +1,7 @@
 package db_models
 
 import (
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,9 +35,9 @@ type Conversation struct {
 }
 
 type ConversationMember struct {
-	PeerID         int64  `gorm:"primaryKey;index:idx_member" json:"peer_id"`
-	UserID         int64  `gorm:"primaryKey;index:idx_member" json:"user_id"`
-	InternalChatID string `gorm:"primaryKey;index;type:varchar(100)"`
+	PeerID         int64  `gorm:"primaryKey;index:idx_member_lookup" json:"peer_id"`
+	UserID         int64  `gorm:"primaryKey;index:idx_user_active_chats,priority:1" json:"user_id"`
+	InternalChatID string `gorm:"primaryKey;index:idx_member_lookup;type:varchar(100)"`
 
 	StartMessageID uint64 `json:"start_message_id"`
 	LastReadID     uint64 `json:"last_read_id"`
@@ -46,8 +47,10 @@ type ConversationMember struct {
 
 	InvitedBy int64      `json:"invited_by"`
 	JoinedAt  time.Time  `gorm:"precision:3" json:"joined_at"`
-	LeftAt    *time.Time `gorm:"precision:3" json:"left_at"`
+	LeftAt    *time.Time `gorm:"precision:3;index:idx_user_active_chats,priority:2" json:"left_at"`
 	JoinCode  *string    `gorm:"type:varchar(191)" json:"join_code"`
+
+	LastMessageID uint64 `gorm:"index:idx_user_active_chats,priority:3"`
 
 	Conversation Conversation `gorm:"foreignKey:InternalChatID;references:InternalID" json:"-"`
 }
@@ -82,8 +85,8 @@ chat_invite_user_by_link
 
 type Message struct {
 	ID       uint64 `gorm:"primaryKey;autoIncrement" json:"id"`
-	ChatID   string `gorm:"index:idx_chat_local;type:varchar(100)" json:"chat_id"`
-	LocalID  uint64 `json:"local_id"`
+	ChatID   string `gorm:"index:idx_chat_local,priority:1;type:varchar(100)" json:"chat_id"`
+	LocalID  uint64 `gorm:"index:idx_chat_local,priority:2" json:"local_id"`
 	RandomID int64  `gorm:"index" json:"random_id"` // Дедупликация
 
 	FromID  int64   `gorm:"index" json:"from_id"` // *1 - user; *-1 community;
@@ -144,6 +147,32 @@ type VKApiMessage struct {
 }
 
 func (m *Message) ToVKApiStruct(tx *gorm.DB, depth int, currentUserID int64, requestedPeerID int64) VKApiMessage {
+	if depth <= 0 || (m.ReplyTo == nil && m.ForwardMessages == "") {
+		return m.ToVKApiStructBatch(depth, currentUserID, requestedPeerID, nil)
+	}
+
+	cache := make(map[uint64]Message)
+
+	if m.ReplyTo != nil && *m.ReplyTo > 0 {
+		var r Message
+		if tx.Where("chat_id = ? AND local_id = ?", m.ChatID, *m.ReplyTo).First(&r).Error == nil {
+			cache[r.LocalID] = r
+		}
+	}
+
+	if m.ForwardMessages != "" {
+		ids := strings.Split(m.ForwardMessages, ",")
+		var fwdMsgs []Message
+		tx.Where("chat_id = ? AND local_id IN ?", m.ChatID, ids).Find(&fwdMsgs)
+		for _, f := range fwdMsgs {
+			cache[f.LocalID] = f
+		}
+	}
+
+	return m.ToVKApiStructBatch(depth, currentUserID, requestedPeerID, cache)
+}
+
+func (m *Message) ToVKApiStructBatch(depth int, currentUserID int64, requestedPeerID int64, cache map[uint64]Message) VKApiMessage {
 	vkMsg := VKApiMessage{
 		ID:          m.LocalID,
 		Date:        m.CreatedAt.Unix(),
@@ -186,22 +215,24 @@ func (m *Message) ToVKApiStruct(tx *gorm.DB, depth int, currentUserID int64, req
 		vkMsg.Action = actionObj
 	}
 
-	if m.ReplyTo != nil && *m.ReplyTo > 0 && depth > 0 {
-		var replyMsg Message
-		err := tx.Where("chat_id = ? AND local_id = ?", m.ChatID, *m.ReplyTo).First(&replyMsg).Error
-		if err == nil {
-			rm := replyMsg.ToVKApiStruct(tx, depth-1, currentUserID, requestedPeerID)
+	if m.ReplyTo != nil && *m.ReplyTo > 0 && depth > 0 && cache != nil {
+		if replyMsg, ok := cache[*m.ReplyTo]; ok {
+			rm := replyMsg.ToVKApiStructBatch(depth-1, currentUserID, requestedPeerID, cache)
 			vkMsg.ReplyMessage = &rm
 		}
 	}
 
-	if m.ForwardMessages != "" && depth > 0 {
+	if m.ForwardMessages != "" && depth > 0 && cache != nil {
 		ids := strings.Split(m.ForwardMessages, ",")
-		var fwdMsgs []Message
-		tx.Where("chat_id = ? AND local_id IN ?", m.ChatID, ids).Find(&fwdMsgs)
+		for _, idStr := range ids {
+			id, err := strconv.ParseUint(strings.TrimSpace(idStr), 10, 64)
+			if err != nil {
+				continue
+			}
 
-		for _, f := range fwdMsgs {
-			vkMsg.ForwardMessages = append(vkMsg.ForwardMessages, f.ToVKApiStruct(tx, depth-1, currentUserID, requestedPeerID))
+			if fwdMsg, ok := cache[id]; ok {
+				vkMsg.ForwardMessages = append(vkMsg.ForwardMessages, fwdMsg.ToVKApiStructBatch(depth-1, currentUserID, requestedPeerID, cache))
+			}
 		}
 	}
 

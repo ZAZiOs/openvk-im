@@ -7,6 +7,7 @@ import (
 	"ovk-im/src/repo/chat"
 	"ovk-im/src/transport/endpoints/core"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -24,69 +25,131 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 	filter := c.DefaultQuery("filter", "all")
 	extended := c.Query("extended") == "1"
 
-	// бля это пиздец.
-	query := db.Instance.Table("conversation_members").
-		Select("conversation_members.*, conversations.last_message_id as conv_last_id").
-		Joins("JOIN conversations ON conversations.internal_id = conversation_members.internal_chat_id").
-		Where("conversation_members.user_id = ? AND conversation_members.left_at IS NULL", currentUserID)
-
-	if filter == "unread" {
-		query = query.Where("conversations.last_message_id > conversation_members.last_read_id")
+	type ResultRow struct {
+		db_models.ConversationMember
+		TotalCount  int64 `gorm:"column:total_count"`
+		TotalUnread int64 `gorm:"column:total_unread"`
 	}
 
-	query = query.Order("conversations.last_message_id DESC")
+	var rows []ResultRow
 
-	var totalCount int64
-	query.Count(&totalCount)
+	query := db.Instance.Table("conversation_members").
+		Select(`
+			conversation_members.*, 
+			COUNT(*) OVER() as total_count,
+			SUM(CASE WHEN last_message_id > last_read_id THEN 1 ELSE 0 END) OVER() as total_unread
+		`).
+		Where("user_id = ? AND left_at IS NULL", currentUserID)
 
-	var memberships []db_models.ConversationMember
-	err := query.Limit(count).Offset(offset).Find(&memberships).Error
+	if filter == "unread" {
+		query = query.Where("last_message_id > last_read_id")
+	}
+
+	err := query.Order("last_message_id DESC").
+		Preload("Conversation").
+		Limit(count).Offset(offset).Find(&rows).Error
 
 	if err != nil {
 		r.Reject(c, 10, "Internal server error")
 		return
 	}
 
-	var totalUnreadConversations int64
-	db.Instance.Table("conversation_members").
-		Joins("JOIN conversations ON conversations.internal_id = conversation_members.internal_chat_id").
-		Where("conversation_members.user_id = ? AND conversation_members.left_at IS NULL", currentUserID).
-		Where("conversations.last_message_id > conversation_members.last_read_id").
-		Count(&totalUnreadConversations)
+	if len(rows) == 0 {
+		c.JSON(http.StatusOK, gin.H{"response": gin.H{"count": 0, "items": []interface{}{}, "unread_count": 0}})
+		return
+	}
+
+	totalCount := rows[0].TotalCount
+	totalUnreadConversations := rows[0].TotalUnread
+
+	lastMsgKeys := make(map[string]uint64)
+	unreadCheckIDs := make([]string, 0)
+
+	for _, row := range rows {
+		if row.LastMessageID > 0 {
+			lastMsgKeys[row.InternalChatID] = row.LastMessageID
+		}
+		if row.LastMessageID > row.LastReadID {
+			unreadCheckIDs = append(unreadCheckIDs, row.InternalChatID)
+		}
+	}
+
+	msgMap := make(map[string]db_models.Message)
+	if len(lastMsgKeys) > 0 {
+		var lastMessages []db_models.Message
+		db.Instance.Where("(chat_id, local_id) IN ?", buildInPairs(lastMsgKeys)).Find(&lastMessages)
+		for _, msg := range lastMessages {
+			msgMap[msg.ChatID] = msg
+		}
+	}
+
+	unreadCounts := make(map[string]int64)
+	if len(unreadCheckIDs) > 0 {
+		type UnreadRes struct {
+			ChatID string
+			Cnt    int64
+		}
+		var results []UnreadRes
+		db.Instance.Model(&db_models.Message{}).
+			Select("chat_id, COUNT(*) as cnt").
+			Where("chat_id IN ? AND from_id != ?", unreadCheckIDs, currentUserID).
+			Group("chat_id").Find(&results)
+
+		for _, res := range results {
+			unreadCounts[res.ChatID] = res.Cnt
+		}
+	}
+
+	preloadedMap := make(map[uint64]db_models.Message)
+	extraMsgIDs := make([]uint64, 0)
+	chatIDs := make([]string, 0)
+
+	for chatID, msg := range msgMap {
+		chatIDs = append(chatIDs, chatID)
+		if msg.ReplyTo != nil && *msg.ReplyTo > 0 {
+			extraMsgIDs = append(extraMsgIDs, *msg.ReplyTo)
+		}
+		if msg.ForwardMessages != "" {
+			for _, idStr := range strings.Split(msg.ForwardMessages, ",") {
+				if id, err := strconv.ParseUint(strings.TrimSpace(idStr), 10, 64); err == nil {
+					extraMsgIDs = append(extraMsgIDs, id)
+				}
+			}
+		}
+	}
+
+	if len(extraMsgIDs) > 0 {
+		var extras []db_models.Message
+		db.Instance.Where("chat_id IN ? AND local_id IN ?", chatIDs, extraMsgIDs).Find(&extras)
+		for _, e := range extras {
+			preloadedMap[e.LocalID] = e
+		}
+	}
 
 	responseItems := make([]gin.H, 0)
-	var userIDs []int64
-	var groupIDs []int64
+	var userIDs, groupIDs []int64
 
-	for _, m := range memberships {
-		var conv db_models.Conversation
-		db.Instance.Where("internal_id = ?", m.InternalChatID).First(&conv)
-
+	for _, row := range rows {
+		m := row.ConversationMember
+		conv := m.Conversation // Из Preload
 		pID := chat.DerivePeerID(m.InternalChatID, currentUserID)
 
-		var lastMsg db_models.Message
+		lastMsg, hasMsg := msgMap[m.InternalChatID]
 		var msgVK interface{} = nil
-		if conv.LastMessageID > 0 {
-			db.Instance.Where("chat_id = ? AND local_id = ?", m.InternalChatID, conv.LastMessageID).First(&lastMsg)
-			msgVK = lastMsg.ToVKApiStruct(db.Instance, 0, currentUserID, pID)
+		if hasMsg {
+			// ВАЖНО: убедись, что ToVKApiStruct не делает запросов к БД внутри
+			msgVK = lastMsg.ToVKApiStructBatch(1, currentUserID, pID, preloadedMap)
 		}
 
 		conversationObj := gin.H{
-			"peer": gin.H{
-				"id":   pID,
-				"type": getPeerType(pID),
-			},
-			"last_message_id": conv.LastMessageID,
+			"peer":            gin.H{"id": pID, "type": getPeerType(pID)},
+			"last_message_id": m.LastMessageID,
 			"in_read":         m.LastReadID,
-			"out_read":        conv.LastMessageID,
+			"out_read":        m.LastMessageID,
 		}
 
-		if conv.LastMessageID > m.LastReadID {
-			var unreadCount int64
-			db.Instance.Model(&db_models.Message{}).
-				Where("chat_id = ? AND local_id > ? AND from_id != ?", m.InternalChatID, m.LastReadID, currentUserID).
-				Count(&unreadCount)
-			conversationObj["unread_count"] = unreadCount
+		if uCount, ok := unreadCounts[m.InternalChatID]; ok {
+			conversationObj["unread_count"] = uCount
 		}
 
 		if conv.PinnedMsgID > 0 {
@@ -99,16 +162,10 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 		})
 
 		if extended {
-			if lastMsg.FromID > 0 {
-				userIDs = append(userIDs, lastMsg.FromID)
-			} else if lastMsg.FromID < 0 {
-				groupIDs = append(groupIDs, -lastMsg.FromID)
+			if hasMsg {
+				addID(lastMsg.FromID, &userIDs, &groupIDs)
 			}
-			if pID > 0 && pID < 2000000000 {
-				userIDs = append(userIDs, pID)
-			} else if pID < 0 {
-				groupIDs = append(groupIDs, -pID)
-			}
+			addID(pID, &userIDs, &groupIDs)
 		}
 	}
 
@@ -146,4 +203,20 @@ func uniqueIDs(ids []int64) []int64 {
 		}
 	}
 	return res
+}
+
+func buildInPairs(keys map[string]uint64) [][]interface{} {
+	res := make([][]interface{}, 0, len(keys))
+	for k, v := range keys {
+		res = append(res, []interface{}{k, v})
+	}
+	return res
+}
+
+func addID(id int64, u *[]int64, g *[]int64) {
+	if id > 0 && id < 2000000000 {
+		*u = append(*u, id)
+	} else if id < 0 {
+		*g = append(*g, -id)
+	}
 }

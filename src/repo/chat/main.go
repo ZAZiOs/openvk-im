@@ -81,6 +81,7 @@ func LeaveChat(tx *gorm.DB, chatID string, userID int64) error {
 func MarkAsRead(tx *gorm.DB, chatID string, userID int64, messageID uint64) error {
 	return getDB(tx).Model(&db_models.ConversationMember{}).
 		Where("internal_chat_id = ? AND user_id = ?", chatID, userID).
+		Where("last_read_id < ?", messageID).
 		Update("last_read_id", messageID).Error
 }
 
@@ -207,4 +208,26 @@ func DerivePeerID(chatID string, currentUserID int64) int64 {
 		return id1
 	}
 	return 0
+}
+
+func RefreshChatLastMessage(tx *gorm.DB, internalChatID string) error {
+	var lastMsg db_models.Message
+	err := tx.Where("chat_id = ? AND (flags & 128) = 0", internalChatID).
+		Order("local_id DESC").
+		First(&lastMsg).Error
+
+	var newLastID uint64 = 0
+	if err == nil {
+		newLastID = lastMsg.LocalID
+	}
+
+	if err := tx.Model(&db_models.Conversation{}).
+		Where("internal_id = ?", internalChatID).
+		Update("last_message_id", newLastID).Error; err != nil {
+		return err
+	}
+
+	return tx.Model(&db_models.ConversationMember{}).
+		Where("internal_chat_id = ?", internalChatID).
+		Update("last_message_id", newLastID).Error
 }

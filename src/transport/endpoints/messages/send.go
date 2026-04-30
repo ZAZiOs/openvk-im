@@ -199,6 +199,22 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 			return err
 		}
 
+		if err := tx.Model(&db_models.Conversation{}).
+			Where("internal_id = ?", internalChatID).
+			Update("last_message_id", localID).Error; err != nil {
+			return err
+		}
+
+		if err := tx.Model(&db_models.ConversationMember{}).
+			Where("internal_chat_id = ?", internalChatID).
+			Update("last_message_id", localID).Error; err != nil {
+			return err
+		}
+
+		tx.Model(&db_models.ConversationMember{}).
+			Where("internal_chat_id = ? AND user_id = ?", internalChatID, currentUserID).
+			Update("last_read_id", localID)
+
 		if message != "" {
 			indexes := r.SearchRepo.GenerateBlindIndexes(newMessage.ID, internalChatID, message)
 			if len(indexes) > 0 {
