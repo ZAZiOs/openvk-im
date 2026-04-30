@@ -78,7 +78,8 @@ func (r *Router) BasicHandler(c *gin.Context) {
 		"messages.getLongPollServer":  lp_ep.GetLongPollServer,
 		"messages.getLongPollHistory": lp_ep.GetLongPollHistory,
 
-		"im.getCounters": custom.GetCounters,
+		"im.getUnreadMessages":      custom.GetUnreadMessages,
+		"im.getUnreadConversations": custom.GetUnreadConversations,
 	}
 
 	handler, exists := methods[slug]

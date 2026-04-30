@@ -45,6 +45,7 @@
 * ❌ **messages.getLastActivity** — дата последней активности пользователя.
 * ❌ **messages.setActivity** — передача статуса набора текста («печатает...»).
 
+> ЧИСТО PHP КОД:
 ### Работа с сообществами (группами) "clubs"
 * ❌ **messages.allowMessagesFromGroup** — разрешить сообщения от группы.
 * ❌ **messages.denyMessagesFromGroup** — запретить сообщения от группы.
