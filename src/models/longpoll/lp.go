@@ -17,8 +17,9 @@ type Envelope struct {
 }
 
 type LPConfig struct {
-	Version int
-	Mode    int
+	Version   int
+	Mode      int
+	Described int
 }
 
 func (c LPConfig) HasAttachments() bool { return (c.Mode & 2) != 0 }
@@ -28,7 +29,7 @@ func (c LPConfig) HasExtra() bool       { return (c.Mode & 64) != 0 }
 func (c LPConfig) ReturnRandomID() bool { return (c.Mode & 128) != 0 }
 
 type VKEvent interface {
-	ToSlice(cfg LPConfig) []interface{}
+	ToSlice(cfg LPConfig) interface{}
 }
 
 func Pack(e VKEvent, cfg LPConfig) ([]byte, error) {
@@ -36,7 +37,7 @@ func Pack(e VKEvent, cfg LPConfig) ([]byte, error) {
 }
 
 type VKGetLongPollHistoryResponse struct {
-	History  [][]interface{}        `json:"history"`
+	History  []interface{}          `json:"history"`
 	Messages VKApiMessagesWithCount `json:"messages"`
 	Profiles []int64                `json:"profiles"`
 	Groups   []int64                `json:"groups"`
@@ -183,7 +184,14 @@ type MsgDeleteEvent struct {
 	MessageID uint64
 }
 
-func (e MsgDeleteEvent) ToSlice(cfg LPConfig) []interface{} {
+func (e MsgDeleteEvent) ToSlice(cfg LPConfig) interface{} {
+	if cfg.Described == 2 {
+		return map[string]interface{}{
+			"type":       "msg.delete",
+			"code":       0,
+			"message_id": e.MessageID,
+		}
+	}
 	return []interface{}{0, e.MessageID, 0}
 }
 
@@ -194,7 +202,16 @@ type MsgReplaceFlagsEvent struct {
 	PeerID    int64
 }
 
-func (e MsgReplaceFlagsEvent) ToSlice(cfg LPConfig) []interface{} {
+func (e MsgReplaceFlagsEvent) ToSlice(cfg LPConfig) interface{} {
+	if cfg.Described == 2 {
+		return map[string]interface{}{
+			"type":       "msg.flags.replace",
+			"code":       1,
+			"message_id": e.MessageID,
+			"flags":      e.Flags.Value,
+			"peer_id":    e.PeerID,
+		}
+	}
 	return []interface{}{1, e.MessageID, e.Flags.ToUint64(), e.PeerID}
 }
 
@@ -205,7 +222,16 @@ type MsgSetFlagsEvent struct {
 	PeerID    int64
 }
 
-func (e MsgSetFlagsEvent) ToSlice(cfg LPConfig) []interface{} {
+func (e MsgSetFlagsEvent) ToSlice(cfg LPConfig) interface{} {
+	if cfg.Described == 2 {
+		return map[string]interface{}{
+			"type":       "msg.flags.set",
+			"code":       2,
+			"message_id": e.MessageID,
+			"mask":       e.Mask.Value,
+			"peer_id":    e.PeerID,
+		}
+	}
 	return []interface{}{2, e.MessageID, e.Mask.ToUint64(), e.PeerID}
 }
 
@@ -216,7 +242,16 @@ type MsgResetFlagsEvent struct {
 	PeerID    int64
 }
 
-func (e MsgResetFlagsEvent) ToSlice(cfg LPConfig) []interface{} {
+func (e MsgResetFlagsEvent) ToSlice(cfg LPConfig) interface{} {
+	if cfg.Described == 2 {
+		return map[string]interface{}{
+			"type":       "msg.flags.reset",
+			"code":       3,
+			"message_id": e.MessageID,
+			"mask":       e.Mask.Value,
+			"peer_id":    e.PeerID,
+		}
+	}
 	return []interface{}{3, e.MessageID, e.Mask.ToUint64(), e.PeerID}
 }
 
@@ -232,7 +267,7 @@ type NewMessageEvent struct {
 	RandomID    int
 }
 
-func (e NewMessageEvent) ToSlice(cfg LPConfig) []interface{} {
+func (e NewMessageEvent) ToSlice(cfg LPConfig) interface{} {
 	var peerID int64
 	if cfg.Version == 0 && e.PeerID < 0 {
 		// Старый формат для сообществ в v0: 1000000000 + group_id
@@ -241,6 +276,33 @@ func (e NewMessageEvent) ToSlice(cfg LPConfig) []interface{} {
 	} else {
 		// В v1+ или для юзеров/чатов используем как есть
 		peerID = e.PeerID
+	}
+
+	if cfg.Described == 2 {
+		res := map[string]interface{}{
+			"type":       "msg.new",
+			"code":       4,
+			"message_id": e.MessageID,
+			"flags":      e.Flags.Value,
+			"peer_id":    peerID,
+			"timestamp":  e.Timestamp,
+			"subject":    "",
+			"text":       e.Text,
+		}
+
+		if cfg.HasAttachments() {
+			if e.Attachments != nil {
+				res["attachments"] = e.Attachments.ToMap()
+			} else {
+				res["attachments"] = map[string]interface{}{}
+			}
+		}
+
+		if cfg.ReturnRandomID() {
+			res["random_id"] = e.RandomID
+		}
+
+		return res
 	}
 
 	res := []interface{}{
@@ -280,7 +342,29 @@ type UpdateMessageEvent struct {
 	Stub        uint8
 }
 
-func (e UpdateMessageEvent) ToSlice(cfg LPConfig) []interface{} {
+func (e UpdateMessageEvent) ToSlice(cfg LPConfig) interface{} {
+	if cfg.Described == 2 {
+		res := map[string]interface{}{
+			"type":       "msg.update",
+			"code":       5,
+			"message_id": e.MessageID,
+			"mask":       e.Mask.Value,
+			"peer_id":    e.PeerID,
+			"timestamp":  e.Timestamp,
+			"text":       e.NewText,
+		}
+
+		if cfg.HasAttachments() {
+			if e.Attachments == nil {
+				res["attachments"] = map[string]interface{}{}
+			} else {
+				res["attachments"] = e.Attachments.ToMap()
+			}
+		}
+
+		return res
+	}
+
 	res := []interface{}{
 		5,
 		e.MessageID,
@@ -309,7 +393,15 @@ type ReadIncomeBeforeEvent struct {
 	LocalID uint64
 }
 
-func (e ReadIncomeBeforeEvent) ToSlice(cfg LPConfig) []interface{} {
+func (e ReadIncomeBeforeEvent) ToSlice(cfg LPConfig) interface{} {
+	if cfg.Described == 2 {
+		return map[string]interface{}{
+			"type":     "read.incoming",
+			"code":     6,
+			"peer_id":  e.PeerID,
+			"local_id": e.LocalID,
+		}
+	}
 	return []interface{}{6, e.PeerID, e.LocalID}
 }
 
@@ -319,7 +411,15 @@ type ReadOutcomeBeforeEvent struct {
 	LocalID uint64
 }
 
-func (e ReadOutcomeBeforeEvent) ToSlice(cfg LPConfig) []interface{} {
+func (e ReadOutcomeBeforeEvent) ToSlice(cfg LPConfig) interface{} {
+	if cfg.Described == 2 {
+		return map[string]interface{}{
+			"type":     "read.outgoing",
+			"code":     7,
+			"peer_id":  e.PeerID,
+			"local_id": e.LocalID,
+		}
+	}
 	return []interface{}{7, e.PeerID, e.LocalID}
 }
 
@@ -330,7 +430,16 @@ type GotOnlineEvent struct {
 	Timestamp uint64 // Last action at
 }
 
-func (e GotOnlineEvent) ToSlice(cfg LPConfig) []interface{} {
+func (e GotOnlineEvent) ToSlice(cfg LPConfig) interface{} {
+	if cfg.Described == 2 {
+		return map[string]interface{}{
+			"type":      "user.online",
+			"code":      8,
+			"user_id":   e.UserID,
+			"extra":     e.Extra,
+			"timestamp": e.Timestamp,
+		}
+	}
 	return []interface{}{8, e.UserID, e.Extra, e.Timestamp}
 }
 
@@ -341,7 +450,16 @@ type GotOfflineEvent struct {
 	Timestamp uint64 // Last action at
 }
 
-func (e GotOfflineEvent) ToSlice(cfg LPConfig) []interface{} {
+func (e GotOfflineEvent) ToSlice(cfg LPConfig) interface{} {
+	if cfg.Described == 2 {
+		return map[string]interface{}{
+			"type":      "user.offline",
+			"code":      9,
+			"user_id":   e.UserID,
+			"flags":     e.Flags,
+			"timestamp": e.Timestamp,
+		}
+	}
 	return []interface{}{9, e.UserID, e.Flags, e.Timestamp}
 }
 
@@ -351,7 +469,15 @@ type ChatResetFlagsEvent struct {
 	Mask   uint64
 }
 
-func (e ChatResetFlagsEvent) ToSlice(cfg LPConfig) []interface{} {
+func (e ChatResetFlagsEvent) ToSlice(cfg LPConfig) interface{} {
+	if cfg.Described == 2 {
+		return map[string]interface{}{
+			"type":    "chat.flags.reset",
+			"code":    10,
+			"peer_id": e.PeerID,
+			"mask":    e.Mask,
+		}
+	}
 	return []interface{}{10, e.PeerID, e.Mask}
 }
 
@@ -361,7 +487,15 @@ type ChatReplaceFlagsEvent struct {
 	Flags  uint64
 }
 
-func (e ChatReplaceFlagsEvent) ToSlice(cfg LPConfig) []interface{} {
+func (e ChatReplaceFlagsEvent) ToSlice(cfg LPConfig) interface{} {
+	if cfg.Described == 2 {
+		return map[string]interface{}{
+			"type":    "chat.flags.replace",
+			"code":    11,
+			"peer_id": e.PeerID,
+			"flags":   e.Flags,
+		}
+	}
 	return []interface{}{11, e.PeerID, e.Flags}
 }
 
@@ -371,7 +505,15 @@ type ChatSetFlagsEvent struct {
 	Mask   uint64
 }
 
-func (e ChatSetFlagsEvent) ToSlice(cfg LPConfig) []interface{} {
+func (e ChatSetFlagsEvent) ToSlice(cfg LPConfig) interface{} {
+	if cfg.Described == 2 {
+		return map[string]interface{}{
+			"type":    "chat.flags.set",
+			"code":    12,
+			"peer_id": e.PeerID,
+			"mask":    e.Mask,
+		}
+	}
 	return []interface{}{12, e.PeerID, e.Mask}
 }
 
@@ -381,7 +523,15 @@ type MassDeleteMessagesEvent struct {
 	LocalID uint64
 }
 
-func (e MassDeleteMessagesEvent) ToSlice(cfg LPConfig) []interface{} {
+func (e MassDeleteMessagesEvent) ToSlice(cfg LPConfig) interface{} {
+	if cfg.Described == 2 {
+		return map[string]interface{}{
+			"type":     "msg.delete.mass",
+			"code":     13,
+			"peer_id":  e.PeerID,
+			"local_id": e.LocalID,
+		}
+	}
 	return []interface{}{13, e.PeerID, e.LocalID}
 }
 
@@ -391,7 +541,15 @@ type MassRestoreMessagesEvent struct {
 	LocalID uint64
 }
 
-func (e MassRestoreMessagesEvent) ToSlice(cfg LPConfig) []interface{} {
+func (e MassRestoreMessagesEvent) ToSlice(cfg LPConfig) interface{} {
+	if cfg.Described == 2 {
+		return map[string]interface{}{
+			"type":     "msg.restore.mass",
+			"code":     14,
+			"peer_id":  e.PeerID,
+			"local_id": e.LocalID,
+		}
+	}
 	return []interface{}{14, e.PeerID, e.LocalID}
 }
 
@@ -402,7 +560,15 @@ type StateSyncEvent struct {
 	MajorID uint64
 }
 
-func (e StateSyncEvent) ToSlice(cfg LPConfig) []interface{} {
+func (e StateSyncEvent) ToSlice(cfg LPConfig) interface{} {
+	if cfg.Described == 2 {
+		return map[string]interface{}{
+			"type":     "sync.state",
+			"code":     20,
+			"peer_id":  e.PeerID,
+			"major_id": e.MajorID,
+		}
+	}
 	return []interface{}{20, e.PeerID, e.MajorID}
 }
 
@@ -413,7 +579,15 @@ type MetaDataSyncEvent struct {
 	MinorID uint64
 }
 
-func (e MetaDataSyncEvent) ToSlice(cfg LPConfig) []interface{} {
+func (e MetaDataSyncEvent) ToSlice(cfg LPConfig) interface{} {
+	if cfg.Described == 2 {
+		return map[string]interface{}{
+			"type":     "sync.metadata",
+			"code":     21,
+			"peer_id":  e.PeerID,
+			"minor_id": e.MinorID,
+		}
+	}
 	return []interface{}{21, e.PeerID, e.MinorID}
 }
 
@@ -423,7 +597,15 @@ type ChatSomethingChangedEvent struct {
 	Self   uint8 // Is triggered by same user 1 or 0
 }
 
-func (e ChatSomethingChangedEvent) ToSlice(cfg LPConfig) []interface{} {
+func (e ChatSomethingChangedEvent) ToSlice(cfg LPConfig) interface{} {
+	if cfg.Described == 2 {
+		return map[string]interface{}{
+			"type":    "chat.update.unknown",
+			"code":    51,
+			"chat_id": e.ChatID,
+			"self":    e.Self,
+		}
+	}
 	return []interface{}{51, e.ChatID, e.Self}
 }
 
@@ -433,7 +615,15 @@ type ChatUpdateEvent struct {
 	PeerID int64
 }
 
-func (e ChatUpdateEvent) ToSlice(cfg LPConfig) []interface{} {
+func (e ChatUpdateEvent) ToSlice(cfg LPConfig) interface{} {
+	if cfg.Described == 2 {
+		return map[string]interface{}{
+			"type":    "chat.update",
+			"code":    52,
+			"type_id": e.TypeID,
+			"peer_id": e.PeerID,
+		}
+	}
 	return []interface{}{52, e.TypeID, e.PeerID}
 }
 
@@ -443,7 +633,15 @@ type IsDMTypingEvent struct {
 	Flags  uint8 // 0 - Stopped, 1 - Typing
 }
 
-func (e IsDMTypingEvent) ToSlice(cfg LPConfig) []interface{} {
+func (e IsDMTypingEvent) ToSlice(cfg LPConfig) interface{} {
+	if cfg.Described == 2 {
+		return map[string]interface{}{
+			"type":    "typing",
+			"code":    61,
+			"user_id": e.UserID,
+			"flags":   e.Flags,
+		}
+	}
 	return []interface{}{61, e.UserID, e.Flags}
 }
 
@@ -453,7 +651,15 @@ type IsChatTypingEvent struct {
 	ChatID int64
 }
 
-func (e IsChatTypingEvent) ToSlice(cfg LPConfig) []interface{} {
+func (e IsChatTypingEvent) ToSlice(cfg LPConfig) interface{} {
+	if cfg.Described == 2 {
+		return map[string]interface{}{
+			"type":    "chat.typing",
+			"code":    62,
+			"user_id": e.UserID,
+			"chat_id": e.ChatID,
+		}
+	}
 	return []interface{}{62, e.UserID, e.ChatID}
 }
 
@@ -465,11 +671,23 @@ type MultiUsersTypingEvent struct {
 	Timestamp  int64
 }
 
-func (e MultiUsersTypingEvent) ToSlice(cfg LPConfig) []interface{} {
+func (e MultiUsersTypingEvent) ToSlice(cfg LPConfig) interface{} {
 	userIDs := e.UserIDs
 	if userIDs == nil {
 		userIDs = []int64{}
 	}
+
+	if cfg.Described == 2 {
+		return map[string]interface{}{
+			"type":        "typing.multi",
+			"code":        63,
+			"user_ids":    userIDs,
+			"peer_id":     e.PeerID,
+			"total_count": e.TotalCount,
+			"timestamp":   e.Timestamp,
+		}
+	}
+
 	return []interface{}{63, userIDs, e.PeerID, e.TotalCount, e.Timestamp}
 }
 
@@ -481,11 +699,23 @@ type MultiUsersAudioRecordingEvent struct {
 	Timestamp  int64
 }
 
-func (e MultiUsersAudioRecordingEvent) ToSlice(cfg LPConfig) []interface{} {
+func (e MultiUsersAudioRecordingEvent) ToSlice(cfg LPConfig) interface{} {
 	userIDs := e.UserIDs
 	if userIDs == nil {
 		userIDs = []int64{}
 	}
+
+	if cfg.Described == 2 {
+		return map[string]interface{}{
+			"type":        "audio_recording.multi",
+			"code":        64,
+			"user_ids":    userIDs,
+			"peer_id":     e.PeerID,
+			"total_count": e.TotalCount,
+			"timestamp":   e.Timestamp,
+		}
+	}
+
 	return []interface{}{64, userIDs, e.PeerID, e.TotalCount, e.Timestamp}
 }
 
@@ -496,7 +726,15 @@ type MakingACallEvent struct {
 	CallID uint64
 }
 
-func (e MakingACallEvent) ToSlice(cfg LPConfig) []interface{} {
+func (e MakingACallEvent) ToSlice(cfg LPConfig) interface{} {
+	if cfg.Described == 2 {
+		return map[string]interface{}{
+			"type":    "call.start",
+			"code":    70,
+			"user_id": e.UserID,
+			"call_id": e.CallID,
+		}
+	}
 	return []interface{}{70, e.UserID, e.CallID}
 }
 
@@ -505,7 +743,14 @@ type CounterUpdateEvent struct {
 	Count uint
 }
 
-func (e CounterUpdateEvent) ToSlice(cfg LPConfig) []interface{} {
+func (e CounterUpdateEvent) ToSlice(cfg LPConfig) interface{} {
+	if cfg.Described == 2 {
+		return map[string]interface{}{
+			"type":  "counter.update",
+			"code":  80,
+			"count": e.Count,
+		}
+	}
 	return []interface{}{80, e.Count}
 }
 
@@ -516,6 +761,15 @@ type NotificationSetEvent struct {
 	DisabledUntil int64 // Timestamp until; -1 - forever
 }
 
-func (e NotificationSetEvent) ToSlice(cfg LPConfig) []interface{} {
+func (e NotificationSetEvent) ToSlice(cfg LPConfig) interface{} {
+	if cfg.Described == 2 {
+		return map[string]interface{}{
+			"type":           "notification.set",
+			"code":           114,
+			"peer_id":        e.PeerID,
+			"sound":          e.Sound,
+			"disabled_until": e.DisabledUntil,
+		}
+	}
 	return []interface{}{114, e.PeerID, e.Sound, e.DisabledUntil}
 }

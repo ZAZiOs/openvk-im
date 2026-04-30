@@ -44,6 +44,11 @@ func GetLongPollHistory(c *gin.Context, r *core.BaseHandler) {
 	eventsLimit, _ := strconv.Atoi(c.DefaultQuery("events_limit", "1000"))
 	msgsLimit, _ := strconv.Atoi(c.DefaultQuery("msgs_limit", "200"))
 
+	lpCfg := lp_models.LPConfig{
+		Version:   3,
+		Described: 0,
+	}
+
 	ctx := c.Request.Context()
 	// Получаем сырые события из Redis или БД событий
 	rawEvents, newTS, err := r.LPRepo.GetUpdates(ctx, userID, ts)
@@ -52,7 +57,7 @@ func GetLongPollHistory(c *gin.Context, r *core.BaseHandler) {
 		return
 	}
 
-	history := make([][]interface{}, 0)
+	history := make([]interface{}, 0)
 	msgItems := make([]db_models.VKApiMessage, 0)
 
 	for _, ev := range rawEvents {
@@ -60,8 +65,9 @@ func GetLongPollHistory(c *gin.Context, r *core.BaseHandler) {
 			break
 		}
 
-		slice := ev.ToSlice(lp_models.LPConfig{Version: 3}) // Обычно используем v3
-		if len(slice) == 0 {
+		sliceData := ev.ToSlice(lpCfg) // Обычно используем v3
+		slice, ok := sliceData.([]interface{})
+		if !ok || len(slice) == 0 {
 			continue
 		}
 

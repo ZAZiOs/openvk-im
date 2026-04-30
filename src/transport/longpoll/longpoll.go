@@ -56,9 +56,16 @@ func LongPollHandler(
 		wait = 90
 	}
 
+	describedStr := query.Get("described")
+	if describedStr == "" {
+		describedStr = "0"
+	}
+	described, _ := strconv.Atoi(describedStr)
+
 	config := lp_models.LPConfig{
-		Version: version,
-		Mode:    mode,
+		Version:   version,
+		Mode:      mode,
+		Described: described,
 	}
 
 	subjectID, err := lpRepo.GetUserIDByKey(r.Context(), key)
