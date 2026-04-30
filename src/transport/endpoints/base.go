@@ -7,6 +7,7 @@ import (
 
 	"ovk-im/src/transport/endpoints/chats"
 	"ovk-im/src/transport/endpoints/core"
+	"ovk-im/src/transport/endpoints/custom"
 	"ovk-im/src/transport/endpoints/history"
 	lp_ep "ovk-im/src/transport/endpoints/longpoll"
 	"ovk-im/src/transport/endpoints/messages"
@@ -76,6 +77,8 @@ func (r *Router) BasicHandler(c *gin.Context) {
 
 		"messages.getLongPollServer":  lp_ep.GetLongPollServer,
 		"messages.getLongPollHistory": lp_ep.GetLongPollHistory,
+
+		"im.getCounters": custom.GetCounters,
 	}
 
 	handler, exists := methods[slug]
