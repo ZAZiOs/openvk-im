@@ -175,6 +175,27 @@ func (r *Repo) PushEvent(ctx context.Context, userID int64, eventType string, ev
 	return uint64(newTS), newPTS, err
 }
 
+func (r *Repo) PushEphemeralEvent(ctx context.Context, userID int64, eventType string, event lp_models.VKEvent) error {
+	tsKey := fmt.Sprintf("im:lp:ts:%d", userID)
+	newTS, _ := r.Client.Incr(ctx, tsKey).Result()
+
+	payload, _ := json.Marshal(event)
+	stored, _ := json.Marshal(StoredEvent{
+		Type: eventType,
+		Data: payload,
+	})
+
+	eventsKey := fmt.Sprintf("im:lp:events:%d", userID)
+
+	pipe := r.Client.Pipeline()
+	pipe.ZAdd(ctx, eventsKey, redis.Z{Score: float64(newTS), Member: stored})
+	pipe.ZRemRangeByRank(ctx, eventsKey, 0, -51)
+	pipe.Expire(ctx, eventsKey, 10*time.Minute)
+
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
 func (r *Repo) incrementUserPTS(ctx context.Context, userID int64) (uint64, error) {
 	ptsKey := fmt.Sprintf("im:lp:pts:%d", userID)
 

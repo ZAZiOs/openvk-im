@@ -11,6 +11,7 @@ import (
 	"ovk-im/src/transport/endpoints/history"
 	lp_ep "ovk-im/src/transport/endpoints/longpoll"
 	"ovk-im/src/transport/endpoints/messages"
+	"ovk-im/src/transport/endpoints/status"
 )
 
 type Router struct {
@@ -74,6 +75,8 @@ func (r *Router) BasicHandler(c *gin.Context) {
 		"messages.getHistoryAttachments": history.GetHistoryAttachments,
 
 		"messages.getConversations": chats.GetConversations,
+
+		"messages.setActivity": status.SetActivity,
 
 		"messages.getLongPollServer":  lp_ep.GetLongPollServer,
 		"messages.getLongPollHistory": lp_ep.GetLongPollHistory,

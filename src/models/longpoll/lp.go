@@ -630,16 +630,24 @@ func (e ChatUpdateEvent) ToSlice(cfg LPConfig) interface{} {
 // v0
 type IsDMTypingEvent struct {
 	UserID int64
-	Flags  uint8 // 0 - Stopped, 1 - Typing
+	Flags  uint8 // 0 - Stopped, 1 - Typing, 2 - Audiomessage
 }
 
 func (e IsDMTypingEvent) ToSlice(cfg LPConfig) interface{} {
 	if cfg.Described == 2 {
+		flag_info := "stopped"
+		switch e.Flags {
+		case 1:
+			flag_info = "typing"
+		case 2:
+			flag_info = "audiomessage"
+		}
 		return map[string]interface{}{
-			"type":    "typing",
-			"code":    61,
-			"user_id": e.UserID,
-			"flags":   e.Flags,
+			"type":      "dm.activity",
+			"code":      61,
+			"user_id":   e.UserID,
+			"flag":      e.Flags,
+			"flag_info": flag_info,
 		}
 	}
 	return []interface{}{61, e.UserID, e.Flags}
@@ -649,18 +657,28 @@ func (e IsDMTypingEvent) ToSlice(cfg LPConfig) interface{} {
 type IsChatTypingEvent struct {
 	UserID int64
 	ChatID int64
+	Flags  uint8 // 0 - Stopped, 1 - Typing, 2 - Audiomessage
 }
 
 func (e IsChatTypingEvent) ToSlice(cfg LPConfig) interface{} {
 	if cfg.Described == 2 {
+		flag_info := "stopped"
+		switch e.Flags {
+		case 1:
+			flag_info = "typing"
+		case 2:
+			flag_info = "audiomessage"
+		}
 		return map[string]interface{}{
-			"type":    "chat.typing",
-			"code":    62,
-			"user_id": e.UserID,
-			"chat_id": e.ChatID,
+			"type":      "chat.typing",
+			"code":      62,
+			"user_id":   e.UserID,
+			"chat_id":   e.ChatID,
+			"flag":      e.Flags,
+			"flag_info": flag_info,
 		}
 	}
-	return []interface{}{62, e.UserID, e.ChatID}
+	return []interface{}{62, e.UserID, e.ChatID, e.Flags}
 }
 
 // v3
