@@ -66,7 +66,7 @@ if (isset($data['code']) && $data['code'] === 5) {
     }
 ```
 
-### im.getUnreadMessages
+### im.getUnreadConversations
 Возвращает:
 ```json
 "response": { 
