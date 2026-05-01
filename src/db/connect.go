@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	env "ovk-im/src/config"
-	dbm "ovk-im/src/models/db"
 
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
@@ -49,20 +48,6 @@ func Connect() {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
 
-	err = dbConn.AutoMigrate(
-		&dbm.Conversation{},
-		&dbm.Message{},
-		&dbm.ConversationMember{},
-		&dbm.ChatInvite{},
-		&dbm.ImState{},
-		&dbm.MessageSearchIndex{},
-		&dbm.ImportantMessage{},
-	)
-
-	if err != nil {
-		log.Fatalf("Failed to migrate database: %v", err)
-	}
-
 	Instance = dbConn
-	fmt.Printf("Database '%s' connected and migrated\n", name)
+	log.Printf("Database '%s' connected\n", name)
 }

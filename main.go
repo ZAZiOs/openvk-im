@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -10,10 +11,10 @@ import (
 	"syscall"
 
 	"github.com/gin-gonic/gin"
-	"github.com/joho/godotenv"
 
 	env "ovk-im/src/config"
 	"ovk-im/src/db"
+	migrate "ovk-im/src/db/migrate"
 	"ovk-im/src/redis"
 	redisrepo "ovk-im/src/repo/redis"
 	"ovk-im/src/repo/search"
@@ -24,11 +25,36 @@ import (
 )
 
 func main() {
-	log.Println("Starting OpenVK-IM server...")
-
-	if err := godotenv.Load(); err != nil {
-		log.Println("No .env file found")
+	if len(os.Args) < 2 || os.Args[1] == "start" {
+		startServer()
+		return
 	}
+
+	switch os.Args[1] {
+	case "db":
+		if len(os.Args) < 3 {
+			log.Fatal("Usage: db [create|migrate-legacy]")
+		}
+
+		db.Connect()
+
+		switch os.Args[2] {
+		case "create":
+			migrate.CreateOrMigrateDB()
+		case "migrate-legacy":
+			migrate.MigrateFromLegacy()
+		default:
+			log.Fatalf("Unknown db command: %s", os.Args[2])
+		}
+
+	default:
+		fmt.Printf("Unknown command: %s\n", os.Args[1])
+		fmt.Println("Usage: [start | db create | db migrate-legacy]")
+	}
+}
+
+func startServer() {
+	log.Println("Starting OpenVK-IM server...")
 
 	secret := env.Get("SECRET_KEY", "aaa")
 
