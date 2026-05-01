@@ -13,7 +13,6 @@ import (
 
 var (
 	Client *redis.Client
-	Prefix string
 	Ctx    = context.Background()
 )
 
@@ -23,8 +22,6 @@ func Init() {
 	pass := env.Get("REDIS_PASS", "")
 	db := env.Get("REDIS_DB", "0")
 	dbn, _ := strconv.Atoi(db)
-
-	Prefix = env.Get("REDIS_PREFIX", "ovkim_")
 
 	Client = redis.NewClient(&redis.Options{
 		Addr:     fmt.Sprintf("%s:%s", host, port),
@@ -40,9 +37,5 @@ func Init() {
 		log.Fatalf("Redis connection failed: %v", err)
 	}
 
-	log.Printf("Redis connected to %s:%s (db: %d, prefix: %s)", host, port, dbn, Prefix)
-}
-
-func Key(key string) string {
-	return Prefix + key
+	log.Printf("Redis connected to %s:%s (db: %d)", host, port, dbn)
 }
