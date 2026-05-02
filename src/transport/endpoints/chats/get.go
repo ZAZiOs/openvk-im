@@ -1,6 +1,7 @@
 package chats
 
 import (
+	"fmt"
 	"net/http"
 	"ovk-im/src/db"
 	db_models "ovk-im/src/models/db"
@@ -133,7 +134,10 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 		m := row.ConversationMember
 		conv := m.Conversation // Из Preload
 		pID := chat.DerivePeerID(m.InternalChatID, currentUserID)
-
+		fmt.Print("CHAT PEER ID: ")
+		fmt.Println(pID)
+		fmt.Print("CHAT INTERNAL ID: ")
+		fmt.Println(m.InternalChatID)
 		lastMsg, hasMsg := msgMap[m.InternalChatID]
 		var msgVK interface{} = nil
 		if hasMsg {
@@ -146,6 +150,8 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 			"last_message_id": m.LastMessageID,
 			"in_read":         m.LastReadID,
 			"out_read":        m.LastMessageID,
+			"important":       (m.Flags & 1) != 0,
+			"unanswered":      (m.Flags & 2) != 0,
 		}
 
 		if uCount, ok := unreadCounts[m.InternalChatID]; ok {
@@ -173,6 +179,195 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 		"count":        totalCount,
 		"items":        responseItems,
 		"unread_count": totalUnreadConversations,
+	}
+
+	if extended {
+		result["profiles"] = uniqueIDs(userIDs)
+		result["groups"] = uniqueIDs(groupIDs)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"response": result})
+}
+
+func GetConversationMembers(c *gin.Context, r *core.BaseHandler) {
+	val, _ := c.Get("userID")
+	currentUserID := val.(int64)
+
+	peerID, _ := strconv.ParseInt(c.Query("peer_id"), 10, 64)
+	if peerID == 0 {
+		r.Reject(c, 100, "One of the parameters is missing: peer_id")
+		return
+	}
+
+	extended := c.Query("extended") == "1"
+
+	var check db_models.ConversationMember
+	err := db.Instance.Where("peer_id = ? AND user_id = ? AND left_at IS NULL", peerID, currentUserID).First(&check).Error
+
+	if err != nil {
+		r.Reject(c, 917, "You don't have access to this chat")
+		return
+	}
+
+	var members []db_models.ConversationMember
+	var userIDs, groupIDs []int64
+	items := make([]gin.H, 0)
+
+	if peerID > 2000000000 {
+		db.Instance.Where("peer_id = ? AND left_at IS NULL", peerID).Find(&members)
+
+		for _, m := range members {
+			item := gin.H{
+				"member_id":  m.UserID,
+				"invited_by": m.InvitedBy,
+				"join_date":  m.JoinedAt.Unix(),
+			}
+			if m.IsAdmin {
+				item["is_admin"] = true
+			}
+			items = append(items, item)
+
+			if extended {
+				addID(m.UserID, &userIDs, &groupIDs)
+				addID(m.InvitedBy, &userIDs, &groupIDs)
+			}
+		}
+	} else {
+		participants := []int64{currentUserID, peerID}
+		for _, p := range participants {
+			items = append(items, gin.H{
+				"member_id": p,
+			})
+			if extended {
+				addID(p, &userIDs, &groupIDs)
+			}
+		}
+	}
+
+	result := gin.H{
+		"count": len(items),
+		"items": items,
+	}
+
+	if extended {
+		result["profiles"] = uniqueIDs(userIDs)
+		result["groups"] = uniqueIDs(groupIDs)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"response": result})
+}
+
+func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
+	val, _ := c.Get("userID")
+	currentUserID := val.(int64)
+
+	peerIDsStr := c.Query("peer_ids")
+	if peerIDsStr == "" {
+		r.Reject(c, 100, "One of the parameters is missing: peer_ids")
+		return
+	}
+
+	extended := c.Query("extended") == "1"
+	parts := strings.Split(peerIDsStr, ",")
+	var targetPeerIDs []int64
+	for _, p := range parts {
+		if id, err := strconv.ParseInt(strings.TrimSpace(p), 10, 64); err == nil {
+			targetPeerIDs = append(targetPeerIDs, id)
+		}
+	}
+
+	var rows []db_models.ConversationMember
+	err := db.Instance.Where("user_id = ? AND peer_id IN ? AND left_at IS NULL", currentUserID, targetPeerIDs).
+		Preload("Conversation").
+		Find(&rows).Error
+
+	if err != nil {
+		r.Reject(c, 10, "Internal server error")
+		return
+	}
+
+	lastMsgKeys := make(map[string]uint64)
+	for _, row := range rows {
+		if row.LastMessageID > 0 {
+			lastMsgKeys[row.InternalChatID] = row.LastMessageID
+		}
+	}
+
+	msgMap := make(map[string]db_models.Message)
+	extraMsgIDs := make([]uint64, 0)
+	chatIDs := make([]string, 0)
+
+	if len(lastMsgKeys) > 0 {
+		var lastMessages []db_models.Message
+		db.Instance.Where("(chat_id, local_id) IN ?", buildInPairs(lastMsgKeys)).Find(&lastMessages)
+
+		for _, msg := range lastMessages {
+			msgMap[msg.ChatID] = msg
+			chatIDs = append(chatIDs, msg.ChatID)
+
+			if msg.ReplyTo != nil && *msg.ReplyTo > 0 {
+				extraMsgIDs = append(extraMsgIDs, *msg.ReplyTo)
+			}
+			if msg.ForwardMessages != "" {
+				for _, idStr := range strings.Split(msg.ForwardMessages, ",") {
+					if id, err := strconv.ParseUint(strings.TrimSpace(idStr), 10, 64); err == nil {
+						extraMsgIDs = append(extraMsgIDs, id)
+					}
+				}
+			}
+		}
+	}
+
+	preloadedMap := make(map[uint64]db_models.Message)
+	if len(extraMsgIDs) > 0 {
+		var extras []db_models.Message
+		db.Instance.Where("chat_id IN ? AND local_id IN ?", chatIDs, extraMsgIDs).Find(&extras)
+		for _, e := range extras {
+			preloadedMap[e.LocalID] = e
+		}
+	}
+
+	responseItems := make([]gin.H, 0)
+	var userIDs, groupIDs []int64
+
+	for _, m := range rows {
+		pID := m.PeerID
+		lastMsg, hasMsg := msgMap[m.InternalChatID]
+
+		var msgVK interface{} = nil
+		if hasMsg {
+			msgVK = lastMsg.ToVKApiStructBatch(1, currentUserID, pID, preloadedMap)
+		}
+
+		convObj := gin.H{
+			"peer":            gin.H{"id": pID, "type": getPeerType(pID)},
+			"last_message_id": m.LastMessageID,
+			"in_read":         m.LastReadID,
+			"out_read":        m.LastMessageID,
+			"important":       (m.Flags & 1) != 0,
+			"unanswered":      (m.Flags & 2) != 0,
+		}
+
+		if m.Conversation.ID != 0 && m.Conversation.PinnedMsgID > 0 {
+			convObj["current_pinned_message"] = gin.H{"id": m.Conversation.PinnedMsgID}
+		}
+
+		responseItems = append(responseItems, gin.H{
+			"conversation": convObj,
+			"last_message": msgVK,
+		})
+
+		if extended {
+			addID(pID, &userIDs, &groupIDs)
+			if hasMsg {
+				addID(lastMsg.FromID, &userIDs, &groupIDs)
+			}
+		}
+	}
+
+	result := gin.H{
+		"count": len(responseItems),
+		"items": responseItems,
 	}
 
 	if extended {

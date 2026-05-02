@@ -74,7 +74,14 @@ func (r *Router) BasicHandler(c *gin.Context) {
 		"messages.getHistory":            history.GetHistory,
 		"messages.getHistoryAttachments": history.GetHistoryAttachments,
 
-		"messages.getConversations": chats.GetConversations,
+		"messages.createChat":                  chats.CreateChat,
+		"messages.getConversations":            chats.GetConversations,
+		"messages.getConversationMembers":      chats.GetConversationMembers,
+		"messages.getConversationsById":        chats.GetConversationsById,
+		"messages.searchConversations":         chats.SearchConversations,
+		"messages.markAsAnsweredConversation":  chats.MarkAsAnsweredConversation,
+		"messages.markAsImportantConversation": chats.MarkAsImportantConversation,
+		"messages.deleteConversation":          chats.DeleteConversation,
 
 		"messages.setActivity": status.SetActivity,
 

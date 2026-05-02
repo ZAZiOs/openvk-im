@@ -1,6 +1,7 @@
 package messages
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 	"strings"
@@ -26,22 +27,19 @@ func MarkAsRead(c *gin.Context, r *core.BaseHandler) {
 		return
 	}
 
+	type markTask struct {
+		maxLocalID uint64
+		pID        int64
+	}
+	tasks := make(map[string]*markTask)
+
 	if peerID != 0 && startID != 0 {
 		chatID := chat.GetInternalChatID(peerID, currentUserID)
-		if err := chat.MarkAsRead(db.Instance, chatID, currentUserID, startID); err == nil {
-			r.BroadcastMarkAsRead(c, peerID, currentUserID, startID)
-		}
+		tasks[chatID] = &markTask{maxLocalID: startID, pID: peerID}
 	}
 
 	if idsStr != "" {
 		parts := strings.Split(idsStr, ",")
-
-		type markTask struct {
-			maxLocalID uint64
-			pID        int64
-		}
-		tasks := make(map[string]*markTask)
-
 		for _, p := range parts {
 			if id, err := strconv.ParseUint(strings.TrimSpace(p), 10, 64); err == nil {
 				var msg db_models.Message
@@ -57,22 +55,26 @@ func MarkAsRead(c *gin.Context, r *core.BaseHandler) {
 				}
 			}
 		}
-
-		for cID, task := range tasks {
-			if err := chat.MarkAsRead(db.Instance, cID, currentUserID, task.maxLocalID); err == nil {
-				r.BroadcastMarkAsRead(c, task.pID, currentUserID, task.maxLocalID)
-			}
-		}
 	}
 
 	if peerID != 0 && startID == 0 && idsStr == "" {
 		chatID := chat.GetInternalChatID(peerID, currentUserID)
 		conv, _ := chat.GetConversation(db.Instance, chatID)
 		if conv != nil {
-			if err := chat.MarkAsRead(db.Instance, chatID, currentUserID, conv.LastMessageID); err == nil {
-				r.BroadcastMarkAsRead(c, peerID, currentUserID, conv.LastMessageID)
-			}
+			tasks[chatID] = &markTask{maxLocalID: conv.LastMessageID, pID: peerID}
 		}
+	}
+
+	if len(tasks) > 0 {
+		go func(tks map[string]*markTask, uid int64) {
+			ctx := context.Background()
+
+			for cID, task := range tks {
+				if err := chat.MarkAsRead(db.Instance, cID, uid, task.maxLocalID); err == nil {
+					r.BroadcastMarkAsRead(ctx, task.pID, uid, task.maxLocalID)
+				}
+			}
+		}(tasks, currentUserID)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"response": 1})

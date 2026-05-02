@@ -1,6 +1,7 @@
 [***Использовать документацию 2019 года***](https://web.archive.org/web/20190817134247/https://vk.com/dev/messages)
 
 ⚠️ - Требуется докинуть longpoll event
+ℹ️ - Требует доработки со стороны PHP
 
 ### Работа с сообщениями "messages"
 * ✅ **messages.send** — отправка сообщения.
@@ -17,23 +18,21 @@
 * ✅ **messages.unpin** — открепление сообщения.
 
 ### Работа с беседами (чатами) "chats"
-* ❌ **messages.createChat** — создание новой беседы.
-* ❌ **messages.getChat** — получение информации о беседе.
-* ❌ **messages.getChatPreview** — получение данных для превью чата по ссылке.
+* ℹ️ **messages.createChat** — создание новой беседы. (`PHP` Добавить проверку что у юзера в друзьях есть добавляемые участники)
+* ❌ `PHP:` **messages.getChat** — получение информации о беседе.
+* ❌ **messages.getChatPreview** — получение данных для превью чата по ссылке. (требует реализации инвайтов)
 * ❌ **messages.editChat** — изменение названия беседы.
-* ❌ **messages.setChatPhoto** — установка фотографии беседы.
-* ❌ **messages.deleteChatPhoto** — удаление фотографии беседы.
+* ❌ `PHP: (+go lp event)` **messages.setChatPhoto** — установка фотографии беседы.
+* ❌ `PHP: (+go lp event)` **messages.deleteChatPhoto** — удаление фотографии беседы.
 * ❌ **messages.addChatUser** — добавление пользователя в беседу.
 * ❌ **messages.removeChatUser** — исключение пользователя из беседы.
-* ❌ **messages.getConversationMembers** — список участников беседы.
+* ✅ **messages.getConversationMembers** — список участников беседы.
 * ✅ **messages.getConversations** — список бесед пользователя.
-* ❌ **messages.getConversationsById** — получение информации о беседах по ID.
-* ❌ **messages.searchConversations** — поиск по диалогам и беседам.
-* ❌ **messages.deleteConversation** — удаление всей беседы (истории).
-* ❌ **messages.markAsAnsweredConversation** — отметка беседы как «отвеченной».
-* ❌ **messages.markAsImportantConversation** — пометка беседы как важной.
-
-### Ссылки-приглашения "invites"
+* ✅ **messages.getConversationsById** — получение информации о беседах по ID.
+* ℹ️ `PHP:` **messages.searchConversations** — поиск по диалогам и беседам. (На PHP так как нужен поиск по именам)
+* ℹ️ **messages.deleteConversation** — удаление всей беседы (истории).
+* ✅ **messages.markAsAnsweredConversation** — отметка беседы как «отвеченной».
+* ✅ **messages.markAsImportantConversation** — пометка беседы как важной.
 * ❌ **messages.getInviteLink** — получение ссылки для приглашения в беседу.
 * ❌ **messages.joinChatByInviteLink** — вход в чат по ссылке-приглашению.
 
@@ -47,9 +46,9 @@
 
 > ЧИСТО PHP КОД:
 ### Работа с сообществами (группами) "clubs"
-* ❌ **messages.allowMessagesFromGroup** — разрешить сообщения от группы.
-* ❌ **messages.denyMessagesFromGroup** — запретить сообщения от группы.
-* ❌ **messages.isMessagesFromGroupAllowed** — проверка, разрешены ли сообщения от группы.
+* ❌ **messages.allowMessagesFromGroup** — Разблокировать отправку сообщений от группы. req: group_id, res: 1
+* ❌ **messages.denyMessagesFromGroup** — Заблокировать отправку сообщений от группы. req: group_id, res: 1
+* ❌ **messages.isMessagesFromGroupAllowed** — Проверить может ли группа тебе писать. req: group_id (от чьего лица) & user_id (кому), res: is_allowed: 0/1
 
 ### Long Poll (обновления в реальном времени) "longpoll"
 * ✅ **messages.getLongPollServer** — получение данных для подключения к Long Poll.

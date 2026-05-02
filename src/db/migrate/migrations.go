@@ -12,6 +12,7 @@ import (
 
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"gorm.io/gorm/logger"
 )
 
@@ -71,22 +72,110 @@ func MigrateFromLegacy() {
 
 	dbx.Instance.Logger = dbx.Instance.Logger.LogMode(logger.Silent)
 
-	secret := env.Get("SECRET_KEY", "your-fallback-very-long-secret-key")
+	secret := env.Get("SECRET_KEY", "error")
+	if len(secret) < 64 {
+		log.Println("SECRET_KEY .env variable is less than 64 bytes")
+		return
+	}
 	searchRepo := search.NewRepository(dbx.Instance, []byte(secret))
+
+	localIDCache := make(map[string]uint64)
+	memberCache := make(map[string]bool)
 
 	var legacyMessages []LegacyMessage
 	batchSize := 1000
 
 	result := legacyDB.FindInBatches(&legacyMessages, batchSize, func(tx *gorm.DB, batch int) error {
-		log.Printf("Processing batch %d...", batch)
-
 		return dbx.Instance.Transaction(func(targetTx *gorm.DB) error {
+			var messagesToInsert []dbm.Message
+			var indexesToInsert []dbm.MessageSearchIndex
+			var membersToUpsert []dbm.ConversationMember
+
 			for _, msg := range legacyMessages {
-				if err := processMessage(targetTx, msg, searchRepo); err != nil {
-					log.Printf("[Import Error] Message ID %d: %v", msg.ID, err)
-					continue
+				currentUserID := int64(msg.SenderID)
+				peerID := int64(msg.RecipientID)
+				internalChatID := chat.GetInternalChatID(peerID, currentUserID)
+
+				if _, ok := localIDCache[internalChatID]; !ok {
+					var lastID uint64
+					targetTx.Model(&dbm.Message{}).Where("chat_id = ?", internalChatID).Select("COALESCE(max(local_id), 0)").Scan(&lastID)
+					localIDCache[internalChatID] = lastID
+				}
+				localIDCache[internalChatID]++
+				currentLocalID := localIDCache[internalChatID]
+
+				usersToCheck := []int64{currentUserID}
+				if peerID < 2000000000 && peerID != currentUserID {
+					usersToCheck = append(usersToCheck, peerID)
+				}
+
+				for _, uid := range usersToCheck {
+					cacheKey := fmt.Sprintf("%s_%d", internalChatID, uid)
+					if !memberCache[cacheKey] {
+						pID := peerID
+						if uid == peerID {
+							pID = currentUserID
+						}
+
+						membersToUpsert = append(membersToUpsert, dbm.ConversationMember{
+							InternalChatID: internalChatID,
+							PeerID:         pID,
+							UserID:         uid,
+							JoinedAt:       time.Unix(msg.Created, 0),
+							IsAdmin:        true,
+							LastMessageID:  currentLocalID,
+						})
+						memberCache[cacheKey] = true
+					}
+				}
+
+				msgTime := time.Unix(msg.Created, 0)
+				updatedTime := msgTime
+				if msg.Edited > 0 {
+					updatedTime = time.Unix(msg.Edited, 0)
+				}
+
+				zero := uint64(0)
+				newMsg := dbm.Message{
+					ChatID:      internalChatID,
+					LocalID:     currentLocalID,
+					FromID:      currentUserID,
+					ReplyTo:     &zero,
+					Text:        dbm.EncryptedJSON(msg.Content),
+					Attachments: dbm.EncryptedJSON(""),
+					CreatedAt:   msgTime,
+					EditedAt:    &updatedTime,
+				}
+				messagesToInsert = append(messagesToInsert, newMsg)
+				log.Printf("Added to batch: %s-%d\n", internalChatID, msg.ID)
+			}
+
+			if len(membersToUpsert) > 0 {
+				targetTx.Clauses(clause.OnConflict{DoNothing: true}).Create(&membersToUpsert)
+			}
+
+			if err := targetTx.Create(&messagesToInsert).Error; err != nil {
+				return err
+			}
+
+			for i, m := range messagesToInsert {
+				legacyMsg := legacyMessages[i]
+				if !legacyMsg.Deleted && legacyMsg.Content != "" {
+					idx := searchRepo.GenerateBlindIndexes(m.ID, m.ChatID, string(legacyMsg.Content))
+					indexesToInsert = append(indexesToInsert, idx...)
 				}
 			}
+			if len(indexesToInsert) > 0 {
+				targetTx.Create(&indexesToInsert)
+			}
+
+			for chatID, lastID := range localIDCache {
+				targetTx.Model(&dbm.ConversationMember{}).
+					Where("internal_chat_id = ?", chatID).
+					Update("last_message_id", lastID)
+			}
+
+			log.Printf("Batch %d processed (%d messages)", batch, len(legacyMessages))
 			return nil
 		})
 	})
@@ -96,74 +185,4 @@ func MigrateFromLegacy() {
 	} else {
 		log.Println("Migration finished successfully!")
 	}
-}
-
-func processMessage(tx *gorm.DB, msg LegacyMessage, searchRepo *search.Repository) error {
-	currentUserID := int64(msg.SenderID)
-	if msg.SenderType != "user" {
-		currentUserID = int64(msg.SenderID)
-	}
-
-	peerID := int64(msg.RecipientID)
-	if msg.RecipientType != "user" {
-		peerID = int64(msg.RecipientID)
-	}
-
-	internalChatID := chat.GetInternalChatID(peerID, currentUserID)
-
-	localID, err := chat.NextLocalID(tx, internalChatID, currentUserID)
-	if err != nil {
-		return err
-	}
-
-	if peerID < 2000000000 {
-		tx.Where(dbm.ConversationMember{InternalChatID: internalChatID, UserID: currentUserID}).
-			FirstOrCreate(&dbm.ConversationMember{
-				InternalChatID: internalChatID,
-				PeerID:         peerID,
-				UserID:         currentUserID,
-				JoinedAt:       time.Unix(msg.Created, 0),
-				IsAdmin:        true,
-			})
-
-		if peerID != currentUserID {
-			tx.Where(dbm.ConversationMember{InternalChatID: internalChatID, UserID: peerID}).
-				FirstOrCreate(&dbm.ConversationMember{
-					InternalChatID: internalChatID,
-					PeerID:         currentUserID,
-					UserID:         peerID,
-					JoinedAt:       time.Unix(msg.Created, 0),
-				})
-		}
-	}
-
-	zero := uint64(0)
-	newMessage := dbm.Message{
-		ChatID:      internalChatID,
-		LocalID:     localID,
-		FromID:      currentUserID,
-		ReplyTo:     &zero,
-		Text:        dbm.EncryptedJSON(msg.Content),
-		Attachments: dbm.EncryptedJSON(""),
-		CreatedAt:   time.Unix(msg.Created, 0),
-	}
-
-	if err := tx.Create(&newMessage).Error; err != nil {
-		return err
-	}
-
-	tx.Model(&dbm.ConversationMember{}).
-		Where("internal_chat_id = ?", internalChatID).
-		Update("last_message_id", localID)
-
-	if !msg.Deleted && msg.Content != "" {
-		indexes := searchRepo.GenerateBlindIndexes(newMessage.ID, internalChatID, msg.Content)
-		if len(indexes) > 0 {
-			tx.Create(&indexes)
-		}
-	}
-
-	log.Printf("Succesfully migrated: %s - %d\n", internalChatID, msg.ID)
-
-	return nil
 }

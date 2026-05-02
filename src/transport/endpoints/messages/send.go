@@ -1,6 +1,7 @@
 package messages
 
 import (
+	"context"
 	"net/http"
 	dbx "ovk-im/src/db"
 	db_models "ovk-im/src/models/db"
@@ -269,19 +270,26 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 		}
 	}
 
-	for _, uid := range recipients {
-		userEvent := lpEvent
-		if uid == currentUserID {
-			userEvent.Flags.Add(lp_models.FlagOutbox)
-		} else {
-			userEvent.Flags.Add(lp_models.FlagUnread)
-		}
+	go func(recipients []int64, event lp_models.NewMessageEvent, currentID int64) {
+		ctx := context.Background()
 
-		_, _, err := r.LPRepo.PushEvent(c.Request.Context(), uid, "new_msg", userEvent)
-		if err == nil {
-			r.Broadcaster.Notify(uid)
+		for _, uid := range recipients {
+			userEvent := event
+
+			userEvent.Flags = lp_models.MessageFlags{Value: event.Flags.Value}
+
+			if uid == currentID {
+				userEvent.Flags.Add(lp_models.FlagOutbox)
+			} else {
+				userEvent.Flags.Add(lp_models.FlagUnread)
+			}
+
+			_, _, err := r.LPRepo.PushEvent(ctx, uid, "new_msg", userEvent)
+			if err == nil {
+				r.Broadcaster.Notify(uid)
+			}
 		}
-	}
+	}(recipients, lpEvent, currentUserID)
 
 	c.JSON(http.StatusOK, gin.H{
 		"response": finalLocalID,

@@ -105,8 +105,9 @@ func GetConversation(tx *gorm.DB, chatID string) (*db_models.Conversation, error
 	return &conv, nil
 }
 
-func CreateConversation(ownerID int64, userIDs []int64, isGroupChat bool) (*db_models.Conversation, error) {
+func CreateConversation(ownerID int64, userIDs []int64, groupTitle string) (*db_models.Conversation, error) {
 	var conv db_models.Conversation
+	isGroupChat := groupTitle != ""
 	err := dbx.Instance.Transaction(func(tx *gorm.DB) error {
 		var chatID string
 		var targetPeerID int64
@@ -124,6 +125,7 @@ func CreateConversation(ownerID int64, userIDs []int64, isGroupChat bool) (*db_m
 		conv = db_models.Conversation{
 			InternalID: chatID,
 			OwnerID:    &ownerID,
+			Title:      groupTitle,
 			Settings:   []byte("{}"),
 			CreatedAt:  time.Now(),
 		}
@@ -178,6 +180,41 @@ func CreateConversation(ownerID int64, userIDs []int64, isGroupChat bool) (*db_m
 	return &conv, err
 }
 
+/*
+Мини документация по сервисным сообщениям:
+chat_create       - Создана беседа пользователем (fromID & Mid)
+chat_title_update - Обновлено название беседы пользователем (fromID & Mid)
+chat_photo_remove - Удалена фотка беседы пользователем (fromID & Mid)
+chat_photo_update - Обновлена фотка беседы пользователем (fromID & Mid)
+chat_invite_user  - Пользователем fromID приглашём пользователь Mid
+chat_kick_user    - Пользователем fromID исключён пользователь Mid
+chat_pin_message  - Пользователь fromID закрепил сообщение Mid
+chat_unpin_message - Пользователь fromID открепил сообщение Mid
+chat_invite_user_by_link - Пользователь (fromID & Mid) зашёл в чат по ссылке приглашению
+*/
+
+func CreateServiceMessage(fromID int64, chatID string, text string, action string, actionMid int64, actionText string) (*db_models.Message, error) {
+	if actionMid == 0 {
+		actionMid = fromID
+	}
+
+	msg := &db_models.Message{
+		FromID:     fromID,
+		ChatID:     chatID,
+		Text:       db_models.EncryptedJSON(text),
+		Action:     action,
+		ActionMid:  actionMid,
+		ActionText: actionText,
+		CreatedAt:  time.Now(),
+	}
+
+	if err := dbx.Instance.Create(msg).Error; err != nil {
+		return nil, err
+	}
+
+	return msg, nil
+}
+
 func GetInternalChatID(peerID int64, currentUserID int64) string {
 	if peerID > 2000000000 {
 		return "c_" + strconv.FormatInt(peerID, 10)
@@ -222,7 +259,7 @@ func DerivePeerID(chatID string, currentUserID int64) int64 {
 	}
 
 	if strings.HasPrefix(chatID, "dm") {
-		parts := strings.Split(chatID[3:], "_")
+		parts := strings.Split(chatID[2:], "_")
 		id1, _ := strconv.ParseInt(parts[0], 10, 64)
 		id2, _ := strconv.ParseInt(parts[1], 10, 64)
 		if id1 == currentUserID {

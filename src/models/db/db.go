@@ -42,8 +42,9 @@ type ConversationMember struct {
 	StartMessageID uint64 `json:"start_message_id"`
 	LastReadID     uint64 `json:"last_read_id"`
 
-	IsAdmin bool `gorm:"type:tinyint(1)" json:"is_admin"`
-	IsMuted bool `gorm:"type:tinyint(1)" json:"is_muted"`
+	IsAdmin bool  `gorm:"type:tinyint(1)" json:"is_admin"`
+	IsMuted bool  `gorm:"type:tinyint(1)" json:"is_muted"`
+	Flags   int64 `json:"flags"`
 
 	InvitedBy int64      `json:"invited_by"`
 	JoinedAt  time.Time  `gorm:"precision:3" json:"joined_at"`
@@ -56,9 +57,9 @@ type ConversationMember struct {
 }
 
 type ChatInvite struct {
-	Code      string `gorm:"primaryKey;type:varchar(191)" json:"code"`
-	PeerID    int64  `gorm:"index" json:"peer_id"`
-	CreatorID int64  `json:"creator_id"`
+	Code           string `gorm:"primaryKey;type:varchar(191)" json:"code"`
+	InternalChatID int64  `gorm:"index:idx_member_lookup;type:varchar(100)"`
+	CreatorID      int64  `json:"creator_id"`
 
 	UsageLimit int64 `json:"usage_limit"` // 0 - unlimited
 	UsageCount int64 `json:"usage_count"`
@@ -66,7 +67,7 @@ type ChatInvite struct {
 	ExpiresAt *time.Time `gorm:"precision:3" json:"expires_at"`
 	CreatedAt time.Time  `gorm:"precision:3" json:"created_at"`
 
-	Conversation Conversation `gorm:"foreignKey:PeerID;references:PeerID" json:"-"`
+	Conversation Conversation `gorm:"foreignKey:InternalChatID;references:InternalID" json:"-"`
 }
 
 /*
@@ -87,7 +88,7 @@ type Message struct {
 	ID       uint64 `gorm:"primaryKey;autoIncrement" json:"id"`
 	ChatID   string `gorm:"index:idx_chat_local,priority:1;type:varchar(100)" json:"chat_id"`
 	LocalID  uint64 `gorm:"index:idx_chat_local,priority:2" json:"local_id"`
-	RandomID int64  `gorm:"index" json:"random_id"` // Дедупликация
+	RandomID int64  `gorm:"index" json:"random_id"`
 
 	FromID  int64   `gorm:"index" json:"from_id"` // *1 - user; *-1 community;
 	ReplyTo *uint64 `json:"reply_to,omitempty"`

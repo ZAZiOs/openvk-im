@@ -61,14 +61,23 @@ func SetActivity(c *gin.Context, r *core.BaseHandler) {
 		}
 	}
 
-	if len(recipients) > 0 {
-		go func(uids []int64, t string, ev lp_models.VKEvent) {
-			for _, uid := range uids {
-				_ = r.LPRepo.PushEphemeralEvent(context.Background(), uid, t, ev)
-				r.Broadcaster.Notify(uid)
-			}
-		}(recipients, eventType, event)
-	}
+	go func(pID, senderID int64, t string, ev lp_models.VKEvent) {
+		ctx := context.Background()
+		var recipients []int64
+
+		if pID > 2000000000 {
+			dbx.Instance.Model(&db_models.ConversationMember{}).
+				Where("peer_id = ? AND user_id != ?", pID, senderID).
+				Pluck("user_id", &recipients)
+		} else if pID != senderID {
+			recipients = []int64{pID}
+		}
+
+		for _, uid := range recipients {
+			_ = r.LPRepo.PushEphemeralEvent(ctx, uid, t, ev)
+			r.Broadcaster.Notify(uid)
+		}
+	}(peerID, currentUserID, eventType, event)
 
 	c.JSON(http.StatusOK, gin.H{"response": 1})
 }
