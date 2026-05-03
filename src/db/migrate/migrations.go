@@ -83,7 +83,7 @@ func MigrateFromLegacy() {
 	memberCache := make(map[string]bool)
 
 	var legacyMessages []LegacyMessage
-	batchSize := 1000
+	batchSize := 2000
 
 	result := legacyDB.FindInBatches(&legacyMessages, batchSize, func(tx *gorm.DB, batch int) error {
 		return dbx.Instance.Transaction(func(targetTx *gorm.DB) error {
@@ -91,18 +91,44 @@ func MigrateFromLegacy() {
 			var indexesToInsert []dbm.MessageSearchIndex
 			var membersToUpsert []dbm.ConversationMember
 
+			touchedChatsInBatch := make(map[string]bool)
+
+			var missingChatIDs []string
 			for _, msg := range legacyMessages {
 				currentUserID := int64(msg.SenderID)
 				peerID := int64(msg.RecipientID)
-				internalChatID := chat.GetInternalChatID(peerID, currentUserID)
-
-				if _, ok := localIDCache[internalChatID]; !ok {
-					var lastID uint64
-					targetTx.Model(&dbm.Message{}).Where("chat_id = ?", internalChatID).Select("COALESCE(max(local_id), 0)").Scan(&lastID)
-					localIDCache[internalChatID] = lastID
+				chatID := chat.GetInternalChatID(peerID, currentUserID)
+				if _, ok := localIDCache[chatID]; !ok {
+					missingChatIDs = append(missingChatIDs, chatID)
+					localIDCache[chatID] = 0 // Временная заглушка
 				}
-				localIDCache[internalChatID]++
-				currentLocalID := localIDCache[internalChatID]
+			}
+
+			if len(missingChatIDs) > 0 {
+				type Result struct {
+					ChatID string
+					MaxID  uint64
+				}
+				var results []Result
+				targetTx.Model(&dbm.Message{}).
+					Select("chat_id, COALESCE(max(local_id), 0) as max_id").
+					Where("chat_id IN ?", missingChatIDs).
+					Group("chat_id").
+					Scan(&results)
+
+				for _, r := range results {
+					localIDCache[r.ChatID] = r.MaxID
+				}
+			}
+
+			for _, msg := range legacyMessages {
+				currentUserID := int64(msg.SenderID)
+				peerID := int64(msg.RecipientID)
+				chatID := chat.GetInternalChatID(peerID, currentUserID)
+
+				localIDCache[chatID]++
+				currentLocalID := localIDCache[chatID]
+				touchedChatsInBatch[chatID] = true
 
 				usersToCheck := []int64{currentUserID}
 				if peerID < 2000000000 && peerID != currentUserID {
@@ -110,7 +136,7 @@ func MigrateFromLegacy() {
 				}
 
 				for _, uid := range usersToCheck {
-					cacheKey := fmt.Sprintf("%s_%d", internalChatID, uid)
+					cacheKey := fmt.Sprintf("%s_%d", chatID, uid)
 					if !memberCache[cacheKey] {
 						pID := peerID
 						if uid == peerID {
@@ -118,7 +144,7 @@ func MigrateFromLegacy() {
 						}
 
 						membersToUpsert = append(membersToUpsert, dbm.ConversationMember{
-							InternalChatID: internalChatID,
+							InternalChatID: chatID,
 							PeerID:         pID,
 							UserID:         uid,
 							JoinedAt:       time.Unix(msg.Created, 0),
@@ -130,28 +156,26 @@ func MigrateFromLegacy() {
 				}
 
 				msgTime := time.Unix(msg.Created, 0)
-				updatedTime := msgTime
+				var updatedTime *time.Time
 				if msg.Edited > 0 {
-					updatedTime = time.Unix(msg.Edited, 0)
+					t := time.Unix(msg.Edited, 0)
+					updatedTime = &t
 				}
 
-				zero := uint64(0)
-				newMsg := dbm.Message{
-					ChatID:      internalChatID,
-					LocalID:     currentLocalID,
-					FromID:      currentUserID,
-					ReplyTo:     &zero,
-					Text:        dbm.EncryptedJSON(msg.Content),
-					Attachments: dbm.EncryptedJSON(""),
-					CreatedAt:   msgTime,
-					EditedAt:    &updatedTime,
-				}
-				messagesToInsert = append(messagesToInsert, newMsg)
-				log.Printf("Added to batch: %s-%d\n", internalChatID, msg.ID)
+				messagesToInsert = append(messagesToInsert, dbm.Message{
+					ChatID:    chatID,
+					LocalID:   currentLocalID,
+					FromID:    currentUserID,
+					Text:      dbm.EncryptedJSON(msg.Content),
+					CreatedAt: msgTime,
+					EditedAt:  updatedTime,
+				})
 			}
 
 			if len(membersToUpsert) > 0 {
-				targetTx.Clauses(clause.OnConflict{DoNothing: true}).Create(&membersToUpsert)
+				if err := targetTx.Clauses(clause.OnConflict{DoNothing: true}).Create(&membersToUpsert).Error; err != nil {
+					return err
+				}
 			}
 
 			if err := targetTx.Create(&messagesToInsert).Error; err != nil {
@@ -166,16 +190,31 @@ func MigrateFromLegacy() {
 				}
 			}
 			if len(indexesToInsert) > 0 {
-				targetTx.Create(&indexesToInsert)
+				if err := targetTx.Create(&indexesToInsert).Error; err != nil {
+					return err
+				}
 			}
 
-			for chatID, lastID := range localIDCache {
+			for chatID := range touchedChatsInBatch {
+				lastID := localIDCache[chatID]
+
 				targetTx.Model(&dbm.ConversationMember{}).
 					Where("internal_chat_id = ?", chatID).
 					Update("last_message_id", lastID)
+
+				err := targetTx.Clauses(clause.OnConflict{
+					Columns:   []clause.Column{{Name: "internal_id"}},
+					DoUpdates: clause.Assignments(map[string]interface{}{"last_message_id": lastID}),
+				}).Create(&dbm.Conversation{
+					InternalID:    chatID,
+					LastMessageID: lastID,
+				}).Error
+				if err != nil {
+					return err
+				}
 			}
 
-			log.Printf("Batch %d processed (%d messages)", batch, len(legacyMessages))
+			log.Printf("Batch %d processed", batch)
 			return nil
 		})
 	})
