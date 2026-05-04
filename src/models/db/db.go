@@ -134,13 +134,14 @@ type ImState struct {
 
 type VKApiMessage struct {
 	ID              uint64         `json:"id"`
+	GlobalID        uint64         `json:"global_id"`
 	Date            int64          `json:"date"`
 	PeerID          int64          `json:"peer_id"`
 	FromID          int64          `json:"from_id"`
 	Out             int            `json:"out"`
 	Text            string         `json:"text"`
 	RandomID        int64          `json:"random_id,omitempty"`
-	Attachments     []interface{}  `json:"attachments"`
+	Attachments     string         `json:"attachments"`
 	Important       bool           `json:"important"`
 	ReplyMessage    *VKApiMessage  `json:"reply_message,omitempty"`
 	ForwardMessages []VKApiMessage `json:"fwd_messages,omitempty"`
@@ -176,13 +177,14 @@ func (m *Message) ToVKApiStruct(tx *gorm.DB, depth int, currentUserID int64, req
 func (m *Message) ToVKApiStructBatch(depth int, currentUserID int64, requestedPeerID int64, cache map[uint64]Message) VKApiMessage {
 	vkMsg := VKApiMessage{
 		ID:          m.LocalID,
+		GlobalID:    m.ID,
 		Date:        m.CreatedAt.Unix(),
 		PeerID:      requestedPeerID,
 		FromID:      m.FromID,
 		Text:        string(m.Text),
 		RandomID:    m.RandomID,
 		Important:   m.Important,
-		Attachments: []interface{}{},
+		Attachments: string(m.Attachments),
 	}
 
 	if m.FromID == currentUserID {

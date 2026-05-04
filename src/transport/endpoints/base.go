@@ -90,6 +90,7 @@ func (r *Router) BasicHandler(c *gin.Context) {
 
 		"im.getUnreadMessages":      custom.GetUnreadMessages,
 		"im.getUnreadConversations": custom.GetUnreadConversations,
+		"im.getMe":                  custom.GetMe,
 	}
 
 	handler, exists := methods[slug]

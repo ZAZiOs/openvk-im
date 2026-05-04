@@ -1,7 +1,6 @@
 package chats
 
 import (
-	"fmt"
 	"net/http"
 	"ovk-im/src/db"
 	db_models "ovk-im/src/models/db"
@@ -132,16 +131,11 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 
 	for _, row := range rows {
 		m := row.ConversationMember
-		conv := m.Conversation // Из Preload
+		conv := m.Conversation
 		pID := chat.DerivePeerID(m.InternalChatID, currentUserID)
-		fmt.Print("CHAT PEER ID: ")
-		fmt.Println(pID)
-		fmt.Print("CHAT INTERNAL ID: ")
-		fmt.Println(m.InternalChatID)
 		lastMsg, hasMsg := msgMap[m.InternalChatID]
 		var msgVK interface{} = nil
 		if hasMsg {
-			// ВАЖНО: убедись, что ToVKApiStruct не делает запросов к БД внутри
 			msgVK = lastMsg.ToVKApiStructBatch(1, currentUserID, pID, preloadedMap)
 		}
 

@@ -45,13 +45,6 @@ func Edit(c *gin.Context, r *core.BaseHandler) {
 		return
 	}
 
-	/* да похуй редактируйте когда хотите, ненавижу этот таймаут.
-
-	if time.Since(msg.CreatedAt).Hours() > 24 {
-		r.Reject(c, 913, "Can't edit message after 24 hours")
-		return
-	}*/
-
 	updates := make(map[string]interface{})
 
 	finalText := string(msg.Text)
