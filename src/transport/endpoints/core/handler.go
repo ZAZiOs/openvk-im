@@ -275,21 +275,14 @@ func (r *BaseHandler) UpdateChatFlags(userID int64, peerID int64, mask uint64, m
 }
 
 func (r *BaseHandler) BackgroundDeleteChat(userID int64, peerID int64, internalChatID string) {
-	// Используем транзакцию, чтобы всё было консистентно
 	tx := r.DB.Begin()
 
-	// 1. Удаляем все сообщения юзера в этом чате
-	// Примечание: в зависимости от логики, мы можем либо помечать как удаленные (deleted_at),
-	// либо физически стирать. Здесь — физическое удаление.
 	err := tx.Where("chat_id = ?", internalChatID).Delete(&db_models.Message{}).Error
 	if err != nil {
 		tx.Rollback()
 		return
 	}
 
-	// 2. Сбрасываем счетчики и последнее сообщение в ConversationMember
-	// Мы не удаляем саму запись участника (чтобы сохранить настройки),
-	// но затираем ссылки на сообщения.
 	updates := map[string]interface{}{
 		"last_message_id": 0,
 		"last_read_id":    0,

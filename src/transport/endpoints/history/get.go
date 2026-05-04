@@ -2,12 +2,11 @@ package history
 
 import (
 	"net/http"
-	"strconv"
-
 	"ovk-im/src/db"
 	db_models "ovk-im/src/models/db"
 	"ovk-im/src/repo/chat"
 	"ovk-im/src/transport/endpoints/core"
+	"strconv"
 
 	"github.com/gin-gonic/gin"
 )
@@ -38,8 +37,10 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 	if count > 200 {
 		count = 200
 	}
+
 	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
-	rev, _ := strconv.Atoi(c.DefaultQuery("rev", "0")) // 0 - desc, 1 - asc
+	startID, _ := strconv.ParseInt(c.Query("start_message_id"), 10, 64)
+	rev, _ := strconv.Atoi(c.DefaultQuery("rev", "0"))
 
 	if peerID > 2000000000 {
 		inChat, err := chat.IsUserInChat(nil, chatID, currentUserID)
@@ -51,6 +52,28 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 
 	var msgs []db_models.Message
 	query := db.Instance.Where("chat_id = ?", chatID)
+
+	if startID > 0 {
+		if offset < 0 {
+			absOffset := int(-offset)
+
+			if rev == 1 {
+				query = query.Where("local_id >= (SELECT local_id FROM messages WHERE chat_id = ? AND local_id <= ? ORDER BY local_id DESC LIMIT 1 OFFSET ?)",
+					chatID, startID, absOffset-1)
+			} else {
+				query = query.Where("local_id <= (SELECT local_id FROM messages WHERE chat_id = ? AND local_id >= ? ORDER BY local_id ASC LIMIT 1 OFFSET ?)",
+					chatID, startID, absOffset-1)
+			}
+
+			offset = 0
+		} else {
+			if rev == 1 {
+				query = query.Where("local_id >= ?", startID)
+			} else {
+				query = query.Where("local_id <= ?", startID)
+			}
+		}
+	}
 
 	order := "local_id DESC"
 	if rev == 1 {
