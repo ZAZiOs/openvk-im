@@ -245,8 +245,8 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 
 	// --- ПОДГОТОВКА LONGPOLL СОБЫТИЯ ---
 	lpAttach := lp_models.NewLPAttachments(attachment)
-
-	// Добавить проверку на emoji
+	lpAttach.From = strconv.FormatInt(currentUserID, 10)
+	// TODO: Добавить проверку на emoji
 
 	lpEvent := lp_models.NewMessageEvent{
 		MessageID:   finalLocalID,

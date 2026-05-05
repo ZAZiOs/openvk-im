@@ -57,6 +57,7 @@ type LPAttachments struct {
 	Source string
 	Mid    string
 	Emoji  bool
+	From   string
 }
 
 type LPAttachmentItem struct {
@@ -81,6 +82,9 @@ func (a LPAttachments) ToMap() map[string]interface{} {
 	}
 	if a.Emoji {
 		res["emoji"] = "1"
+	}
+	if a.From != "" {
+		res["from"] = a.From
 	}
 
 	return res

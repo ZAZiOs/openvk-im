@@ -176,6 +176,7 @@ func (r *BaseHandler) SendFlagsUpdate(uid int64, peerID int64, localID uint64, f
 func (r *BaseHandler) SendUpdateEvent(peerID int64, localID uint64, text string, attachStr string, senderID int64) {
 	go func() {
 		lpAttach := lp_models.NewLPAttachments(attachStr)
+		lpAttach.From = strconv.FormatInt(senderID, 10)
 		updateEvent := lp_models.UpdateMessageEvent{
 			MessageID:   localID,
 			PeerID:      peerID,
