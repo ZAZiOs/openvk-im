@@ -15,88 +15,122 @@ import (
 )
 
 func Delete(c *gin.Context, r *core.BaseHandler) {
-	val, _ := c.Get("userID")
+	val, exists := c.Get("userID")
+	if !exists || val == nil {
+		return
+	}
 	currentUserID := val.(int64)
+
+	peerID, _ := strconv.ParseInt(c.Query("peer_id"), 10, 64)
 	idsStr := c.Query("message_ids")
 	deleteAll := c.Query("delete_for_all") == "1"
 
-	if idsStr == "" {
-		r.Reject(c, 100, "One of the parameters is missing: message_ids")
+	if peerID == 0 || idsStr == "" {
+		r.Reject(c, 100, "One of the parameters is missing: peer_id or message_ids")
 		return
 	}
 
 	idStrings := strings.Split(idsStr, ",")
-	var globalIDs []uint64
+	var localIDs []uint64
 	for _, s := range idStrings {
 		if id, err := strconv.ParseUint(strings.TrimSpace(s), 10, 64); err == nil {
-			globalIDs = append(globalIDs, id)
+			localIDs = append(localIDs, id)
 		}
 	}
 
+	if len(localIDs) == 0 {
+		r.Reject(c, 100, "Invalid message_ids format")
+		return
+	}
+
+	chatID := chat.GetInternalChatID(peerID, currentUserID)
 	results := make(map[string]int)
-	affectedChats := make(map[string]bool)
 
-	dbx.Instance.Transaction(func(tx *gorm.DB) error {
-		for _, gID := range globalIDs {
-			var msg db_models.Message
-			if err := tx.Where("id = ?", gID).First(&msg).Error; err != nil {
-				continue
-			}
+	err := dbx.Instance.Transaction(func(tx *gorm.DB) error {
+		var msgs []db_models.Message
 
-			canAccess, _ := chat.IsUserInChat(tx, msg.ChatID, currentUserID)
-			if !canAccess {
-				continue
-			}
+		if err := tx.Where("chat_id = ? AND local_id IN ?", chatID, localIDs).Find(&msgs).Error; err != nil {
+			return err
+		}
 
+		now := time.Now()
+		for _, msg := range msgs {
 			newFlags := msg.Flags | 128
-			if err := tx.Model(&msg).Update("flags", newFlags).Error; err != nil {
+
+			updates := map[string]interface{}{
+				"flags":      newFlags,
+				"deleted_at": &now,
+			}
+
+			if err := tx.Model(&msg).Updates(updates).Error; err != nil {
 				continue
 			}
 
-			results[strconv.FormatUint(gID, 10)] = 1
-			affectedChats[msg.ChatID] = true
+			results[strconv.FormatUint(msg.LocalID, 10)] = 1
 
-			msgPeerID := chat.DerivePeerID(msg.ChatID, currentUserID)
 			canDeleteForAll := deleteAll && msg.FromID == currentUserID && time.Since(msg.CreatedAt).Hours() <= 24
-			r.SendFlagsUpdate(currentUserID, msgPeerID, msg.LocalID, newFlags, canDeleteForAll)
+			r.SendFlagsUpdate(currentUserID, peerID, msg.LocalID, newFlags, canDeleteForAll)
 		}
 
-		for cID := range affectedChats {
-			chat.RefreshChatLastMessage(tx, cID)
+		if len(msgs) > 0 {
+			chat.RefreshChatLastMessage(tx, chatID)
 		}
+
 		return nil
 	})
+
+	if err != nil {
+		r.Reject(c, 10, "Internal server error during deletion")
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{"response": results})
 }
 
 func Restore(c *gin.Context, r *core.BaseHandler) {
-	val, _ := c.Get("userID")
+	val, exists := c.Get("userID")
+	if !exists || val == nil {
+		return
+	}
 	currentUserID := val.(int64)
-	gID, _ := strconv.ParseUint(c.Query("message_id"), 10, 64)
 
-	dbx.Instance.Transaction(func(tx *gorm.DB) error {
+	peerID, _ := strconv.ParseInt(c.Query("peer_id"), 10, 64)
+	messageID, _ := strconv.ParseUint(c.Query("message_id"), 10, 64)
+
+	if peerID == 0 || messageID == 0 {
+		r.Reject(c, 100, "One of the parameters is missing: peer_id or message_id")
+		return
+	}
+
+	chatID := chat.GetInternalChatID(peerID, currentUserID)
+
+	err := dbx.Instance.Transaction(func(tx *gorm.DB) error {
 		var msg db_models.Message
-		if err := tx.Where("id = ?", gID).First(&msg).Error; err != nil {
+		if err := tx.Where("chat_id = ? AND local_id = ?", chatID, messageID).First(&msg).Error; err != nil {
 			return err
-		}
-
-		canAccess, _ := chat.IsUserInChat(tx, msg.ChatID, currentUserID)
-		if !canAccess {
-			return nil
 		}
 
 		newFlags := msg.Flags &^ 128
-		if err := tx.Model(&msg).Update("flags", newFlags).Error; err != nil {
+
+		updates := map[string]interface{}{
+			"flags":      newFlags,
+			"deleted_at": nil,
+		}
+
+		if err := tx.Model(&msg).Updates(updates).Error; err != nil {
 			return err
 		}
 
-		chat.RefreshChatLastMessage(tx, msg.ChatID)
+		chat.RefreshChatLastMessage(tx, chatID)
 
-		msgPeerID := chat.DerivePeerID(msg.ChatID, currentUserID)
-		r.SendFlagsUpdate(currentUserID, msgPeerID, msg.LocalID, newFlags, false)
+		r.SendFlagsUpdate(currentUserID, peerID, msg.LocalID, newFlags, false)
 		return nil
 	})
+
+	if err != nil {
+		r.Reject(c, 910, "Can't restore this message, maybe it doesn't exist")
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{"response": 1})
 }

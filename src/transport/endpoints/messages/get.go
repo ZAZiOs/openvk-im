@@ -36,7 +36,7 @@ func GetByID(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	var dbMessages []db_models.Message
-	err := dbx.Instance.Where("id IN ? AND chat_id IN (SELECT internal_chat_id FROM conversation_members WHERE user_id = ? AND left_at IS NULL)",
+	err := dbx.Instance.Where("id IN ? AND deleted_at IS NULL AND chat_id IN (SELECT internal_chat_id FROM conversation_members WHERE user_id = ? AND left_at IS NULL)",
 		ids, currentUserID).Find(&dbMessages).Error
 
 	if err != nil {
@@ -100,7 +100,7 @@ func GetByConversationMessageID(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	var dbMessages []db_models.Message
-	err := dbx.Instance.Where("chat_id = ? AND local_id IN ?", chatID, localIDs).Find(&dbMessages).Error
+	err := dbx.Instance.Where("chat_id = ? AND local_id IN ? AND deleted_at IS NULL", chatID, localIDs).Find(&dbMessages).Error
 
 	if err != nil {
 		r.Reject(c, 10, "Internal server error")

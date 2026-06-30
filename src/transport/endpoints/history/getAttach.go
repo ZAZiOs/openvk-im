@@ -60,7 +60,7 @@ func GetHistoryAttachments(c *gin.Context, r *core.BaseHandler) {
 
 	var msgs []db_models.Message
 
-	query := db.Instance.Where("chat_id = ? AND attachments != '[]' AND attachments IS NOT NULL", chatID)
+	query := db.Instance.Where("chat_id = ? AND attachments != '[]' AND attachments IS NOT NULL AND deleted_at IS NULL", chatID)
 
 	order := "local_id DESC"
 	if c.Query("preserve_order") == "1" {

@@ -51,17 +51,17 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	var msgs []db_models.Message
-	query := db.Instance.Where("chat_id = ?", chatID)
+	query := db.Instance.Where("chat_id = ? AND deleted_at IS NULL", chatID)
 
 	if startID > 0 {
 		if offset < 0 {
 			absOffset := int(-offset)
 
 			if rev == 1 {
-				query = query.Where("local_id >= (SELECT local_id FROM messages WHERE chat_id = ? AND local_id <= ? ORDER BY local_id DESC LIMIT 1 OFFSET ?)",
+				query = query.Where("local_id >= (SELECT local_id FROM messages WHERE chat_id = ? AND deleted_at IS NULL AND local_id <= ? ORDER BY local_id DESC LIMIT 1 OFFSET ?)",
 					chatID, startID, absOffset-1)
 			} else {
-				query = query.Where("local_id <= (SELECT local_id FROM messages WHERE chat_id = ? AND local_id >= ? ORDER BY local_id ASC LIMIT 1 OFFSET ?)",
+				query = query.Where("local_id <= (SELECT local_id FROM messages WHERE chat_id = ? AND deleted_at IS NULL AND local_id >= ? ORDER BY local_id ASC LIMIT 1 OFFSET ?)",
 					chatID, startID, absOffset-1)
 			}
 
@@ -87,7 +87,7 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	var totalCount int64
-	db.Instance.Model(&db_models.Message{}).Where("chat_id = ?", chatID).Count(&totalCount)
+	db.Instance.Model(&db_models.Message{}).Where("chat_id = ? AND deleted_at IS NULL", chatID).Count(&totalCount)
 
 	responseItems := make([]db_models.VKApiMessage, len(msgs))
 	for i, m := range msgs {
@@ -98,7 +98,7 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 	var unreadCount int64
 	if member != nil {
 		db.Instance.Model(&db_models.Message{}).
-			Where("chat_id = ? AND local_id > ? AND from_id != ?", chatID, member.LastReadID, currentUserID).
+			Where("chat_id = ? AND local_id > ? AND from_id != ? AND deleted_at IS NULL", chatID, member.LastReadID, currentUserID).
 			Count(&unreadCount)
 	}
 
