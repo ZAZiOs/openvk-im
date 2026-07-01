@@ -59,15 +59,15 @@ func SearchConversations(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	responseItems := make([]gin.H, 0)
-	var userIDs, groupIDs []int64
+	var userIDs, groupIDs, chatIDs []int64
 
 	for _, m := range rows {
 		pID := chat.DerivePeerID(m.InternalChatID, currentUserID)
 		lastMsg, hasMsg := msgMap[m.InternalChatID]
 
-		addID(pID, &userIDs, &groupIDs)
+		addID(pID, &userIDs, &groupIDs, &chatIDs)
 		if hasMsg {
-			addID(lastMsg.FromID, &userIDs, &groupIDs)
+			addID(lastMsg.FromID, &userIDs, &groupIDs, &chatIDs)
 		}
 
 		convObj := gin.H{
@@ -91,6 +91,7 @@ func SearchConversations(c *gin.Context, r *core.BaseHandler) {
 	if extended {
 		result["profiles"] = uniqueIDs(userIDs)
 		result["groups"] = uniqueIDs(groupIDs)
+		result["chats"] = uniqueIDs(chatIDs)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"response": result})

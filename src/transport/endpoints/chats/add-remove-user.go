@@ -29,7 +29,23 @@ func AddChatUser(c *gin.Context, r *core.BaseHandler) {
 	}
 	chatID := chat.GetInternalChatID(peerID, currentUserID)
 
-	err := chat.AddUserToConversation(chatID, userID, currentUserID)
+	isInviterInChat, err := chat.IsUserInChat(nil, chatID, currentUserID)
+	if err != nil || !isInviterInChat {
+		r.Reject(c, 15, "Access denied: you are not a member of this chat")
+		return
+	}
+
+	isTargetInChat, err := chat.IsUserInChat(nil, chatID, userID)
+	if err != nil {
+		r.Reject(c, 10, "Internal server error: failed to check user status")
+		return
+	}
+	if isTargetInChat {
+		r.Reject(c, 15, "User is already a member of this chat")
+		return
+	}
+
+	err = chat.AddUserToConversation(chatID, userID, currentUserID)
 	if err != nil {
 		r.Reject(c, 10, "Internal server error: failed to add user: "+err.Error())
 		return

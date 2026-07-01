@@ -102,10 +102,10 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 
 	preloadedMap := make(map[uint64]db_models.Message)
 	extraMsgIDs := make([]uint64, 0)
-	chatIDs := make([]string, 0)
+	convIDs := make([]string, 0)
 
 	for chatID, msg := range msgMap {
-		chatIDs = append(chatIDs, chatID)
+		convIDs = append(convIDs, chatID)
 		if msg.ReplyTo != nil && *msg.ReplyTo > 0 {
 			extraMsgIDs = append(extraMsgIDs, *msg.ReplyTo)
 		}
@@ -120,14 +120,14 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 
 	if len(extraMsgIDs) > 0 {
 		var extras []db_models.Message
-		db.Instance.Where("chat_id IN ? AND local_id IN ?", chatIDs, extraMsgIDs).Find(&extras)
+		db.Instance.Where("chat_id IN ? AND local_id IN ?", convIDs, extraMsgIDs).Find(&extras)
 		for _, e := range extras {
 			preloadedMap[e.LocalID] = e
 		}
 	}
 
 	responseItems := make([]gin.H, 0)
-	var userIDs, groupIDs []int64
+	var userIDs, groupIDs, chatIDs []int64
 
 	for _, row := range rows {
 		m := row.ConversationMember
@@ -163,9 +163,9 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 
 		if extended {
 			if hasMsg {
-				addID(lastMsg.FromID, &userIDs, &groupIDs)
+				addID(lastMsg.FromID, &userIDs, &groupIDs, &chatIDs)
 			}
-			addID(pID, &userIDs, &groupIDs)
+			addID(pID, &userIDs, &groupIDs, &chatIDs)
 		}
 	}
 
@@ -178,6 +178,7 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 	if extended {
 		result["profiles"] = uniqueIDs(userIDs)
 		result["groups"] = uniqueIDs(groupIDs)
+		result["chats"] = uniqueIDs(chatIDs)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"response": result})
@@ -204,7 +205,7 @@ func GetConversationMembers(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	var members []db_models.ConversationMember
-	var userIDs, groupIDs []int64
+	var userIDs, groupIDs, chatIDs []int64
 	items := make([]gin.H, 0)
 
 	if peerID > 2000000000 {
@@ -222,8 +223,8 @@ func GetConversationMembers(c *gin.Context, r *core.BaseHandler) {
 			items = append(items, item)
 
 			if extended {
-				addID(m.UserID, &userIDs, &groupIDs)
-				addID(m.InvitedBy, &userIDs, &groupIDs)
+				addID(m.UserID, &userIDs, &groupIDs, &chatIDs)
+				addID(m.InvitedBy, &userIDs, &groupIDs, &chatIDs)
 			}
 		}
 	} else {
@@ -233,7 +234,7 @@ func GetConversationMembers(c *gin.Context, r *core.BaseHandler) {
 				"member_id": p,
 			})
 			if extended {
-				addID(p, &userIDs, &groupIDs)
+				addID(p, &userIDs, &groupIDs, &chatIDs)
 			}
 		}
 	}
@@ -246,6 +247,7 @@ func GetConversationMembers(c *gin.Context, r *core.BaseHandler) {
 	if extended {
 		result["profiles"] = uniqueIDs(userIDs)
 		result["groups"] = uniqueIDs(groupIDs)
+		result["chats"] = uniqueIDs(chatIDs)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"response": result})
@@ -289,7 +291,7 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 
 	msgMap := make(map[string]db_models.Message)
 	extraMsgIDs := make([]uint64, 0)
-	chatIDs := make([]string, 0)
+	convIDs := make([]string, 0)
 
 	if len(lastMsgKeys) > 0 {
 		var lastMessages []db_models.Message
@@ -297,7 +299,7 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 
 		for _, msg := range lastMessages {
 			msgMap[msg.ChatID] = msg
-			chatIDs = append(chatIDs, msg.ChatID)
+			convIDs = append(convIDs, msg.ChatID)
 
 			if msg.ReplyTo != nil && *msg.ReplyTo > 0 {
 				extraMsgIDs = append(extraMsgIDs, *msg.ReplyTo)
@@ -315,14 +317,14 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 	preloadedMap := make(map[uint64]db_models.Message)
 	if len(extraMsgIDs) > 0 {
 		var extras []db_models.Message
-		db.Instance.Where("chat_id IN ? AND local_id IN ?", chatIDs, extraMsgIDs).Find(&extras)
+		db.Instance.Where("chat_id IN ? AND local_id IN ?", convIDs, extraMsgIDs).Find(&extras)
 		for _, e := range extras {
 			preloadedMap[e.LocalID] = e
 		}
 	}
 
 	responseItems := make([]gin.H, 0)
-	var userIDs, groupIDs []int64
+	var userIDs, groupIDs, chatIDs []int64
 
 	for _, m := range rows {
 		pID := m.PeerID
@@ -352,9 +354,9 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 		})
 
 		if extended {
-			addID(pID, &userIDs, &groupIDs)
+			addID(pID, &userIDs, &groupIDs, &chatIDs)
 			if hasMsg {
-				addID(lastMsg.FromID, &userIDs, &groupIDs)
+				addID(lastMsg.FromID, &userIDs, &groupIDs, &chatIDs)
 			}
 		}
 	}
@@ -367,6 +369,7 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 	if extended {
 		result["profiles"] = uniqueIDs(userIDs)
 		result["groups"] = uniqueIDs(groupIDs)
+		result["chats"] = uniqueIDs(chatIDs)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"response": result})
@@ -402,8 +405,10 @@ func buildInPairs(keys map[string]uint64) [][]interface{} {
 	return res
 }
 
-func addID(id int64, u *[]int64, g *[]int64) {
-	if id > 0 && id < 2000000000 {
+func addID(id int64, u *[]int64, g *[]int64, c *[]int64) {
+	if id > 2000000000 {
+		*c = append(*c, id)
+	} else if id > 0 && id < 2000000000 {
 		*u = append(*u, id)
 	} else if id < 0 {
 		*g = append(*g, -id)
