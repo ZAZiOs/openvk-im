@@ -18,14 +18,14 @@
 * ✅ **messages.unpin** — открепление сообщения.
 
 ### Работа с беседами (чатами) "chats"
-* ℹ️ **messages.createChat** — создание новой беседы. (`PHP` Добавить проверку что у юзера в друзьях есть добавляемые участники)
+* ✅ **messages.createChat** — создание новой беседы.
 * ❌ `PHP:` **messages.getChat** — получение информации о беседе.
 * ❌ **messages.getChatPreview** — получение данных для превью чата по ссылке. (требует реализации инвайтов)
 * ❌ **messages.editChat** — изменение названия беседы.
 * ❌ `PHP: (+go lp event)` **messages.setChatPhoto** — установка фотографии беседы.
 * ❌ `PHP: (+go lp event)` **messages.deleteChatPhoto** — удаление фотографии беседы.
-* ❌ **messages.addChatUser** — добавление пользователя в беседу.
-* ❌ **messages.removeChatUser** — исключение пользователя из беседы.
+* ✅ **messages.addChatUser** — добавление пользователя в беседу.
+* ✅ **messages.removeChatUser** — исключение пользователя из беседы.
 * ✅ **messages.getConversationMembers** — список участников беседы.
 * ✅ **messages.getConversations** — список бесед пользователя.
 * ✅ **messages.getConversationsById** — получение информации о беседах по ID.

@@ -72,12 +72,6 @@ func NextLocalID(tx *gorm.DB, chatID string, fromID int64) (uint64, error) {
 	return conv.LastMessageID, nil
 }
 
-func LeaveChat(tx *gorm.DB, chatID string, userID int64) error {
-	return getDB(tx).Model(&db_models.ConversationMember{}).
-		Where("internal_chat_id = ? AND user_id = ?", chatID, userID).
-		Update("left_at", time.Now()).Error
-}
-
 func MarkAsRead(tx *gorm.DB, chatID string, userID int64, messageID uint64) error {
 	return getDB(tx).Model(&db_models.ConversationMember{}).
 		Where("internal_chat_id = ? AND user_id = ?", chatID, userID).
@@ -137,14 +131,21 @@ func CreateConversation(ownerID int64, userIDs []int64, groupTitle string) (*db_
 		if isGroupChat {
 			conv.PeerID = int64(2000000000 + conv.ID)
 			conv.InternalID = "c_" + strconv.FormatInt(conv.PeerID, 10)
-			tx.Model(&conv).Updates(map[string]interface{}{
+
+			if err := tx.Table("conversations").Where("id = ?", conv.ID).Updates(map[string]interface{}{
 				"peer_id":     conv.PeerID,
 				"internal_id": conv.InternalID,
-			})
+			}).Error; err != nil {
+				return err
+			}
+
 			chatID = conv.InternalID
+			targetPeerID = conv.PeerID
 		} else {
 			conv.PeerID = targetPeerID
-			tx.Model(&conv).Update("peer_id", targetPeerID)
+			if err := tx.Table("conversations").Where("id = ?", conv.ID).Update("peer_id", targetPeerID).Error; err != nil {
+				return err
+			}
 		}
 
 		var members []db_models.ConversationMember
@@ -180,6 +181,55 @@ func CreateConversation(ownerID int64, userIDs []int64, groupTitle string) (*db_
 	return &conv, err
 }
 
+func AddUserToConversation(chatID string, userID int64, inviterID int64) error {
+	if !strings.HasPrefix(chatID, "c_") {
+		// Может стоит поменять потом на создание чата с этим человеком?
+		return errors.New("cannot add user to direct message")
+	}
+
+	return dbx.Instance.Transaction(func(tx *gorm.DB) error {
+		var member db_models.ConversationMember
+		err := tx.Where("internal_chat_id = ? AND user_id = ?", chatID, userID).First(&member).Error
+
+		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			peerID, _ := strconv.ParseInt(chatID[2:], 10, 64)
+			newMember := db_models.ConversationMember{
+				InternalChatID: chatID,
+				PeerID:         peerID,
+				UserID:         userID,
+				IsAdmin:        false,
+				JoinedAt:       time.Now(),
+				InvitedBy:      inviterID,
+			}
+			return tx.Create(&newMember).Error
+		}
+
+		isActive, err := IsUserInChat(tx, chatID, userID)
+		if err != nil {
+			return err
+		}
+		if isActive {
+			return errors.New("user is already in the conversation")
+		}
+
+		return tx.Model(&member).Updates(map[string]interface{}{
+			"left_at":    gorm.Expr("NULL"),
+			"invited_by": inviterID,
+			"joined_at":  time.Now(),
+		}).Error
+	})
+}
+
+func RemoveUserFromConversation(tx *gorm.DB, chatID string, userID int64) error {
+	return getDB(tx).Model(&db_models.ConversationMember{}).
+		Where("internal_chat_id = ? AND user_id = ?", chatID, userID).
+		Update("left_at", time.Now()).Error
+}
+
 /*
 Мини документация по сервисным сообщениям:
 chat_create       - Создана беседа пользователем (fromID & Mid)
@@ -198,17 +248,37 @@ func CreateServiceMessage(fromID int64, chatID string, text string, action strin
 		actionMid = fromID
 	}
 
-	msg := &db_models.Message{
-		FromID:     fromID,
-		ChatID:     chatID,
-		Text:       db_models.EncryptedJSON(text),
-		Action:     action,
-		ActionMid:  actionMid,
-		ActionText: actionText,
-		CreatedAt:  time.Now(),
-	}
+	var msg *db_models.Message
 
-	if err := dbx.Instance.Create(msg).Error; err != nil {
+	err := dbx.Instance.Transaction(func(tx *gorm.DB) error {
+		localID, err := NextLocalID(tx, chatID, fromID)
+		if err != nil {
+			return err
+		}
+
+		msg = &db_models.Message{
+			FromID:     fromID,
+			ChatID:     chatID,
+			LocalID:    localID,
+			Text:       db_models.EncryptedJSON(text),
+			Action:     action,
+			ActionMid:  actionMid,
+			ActionText: actionText,
+			CreatedAt:  time.Now(),
+		}
+
+		if err := tx.Create(msg).Error; err != nil {
+			return err
+		}
+
+		err = tx.Table("conversation_members").
+			Where("internal_chat_id = ? AND left_at IS NULL", chatID).
+			Update("last_message_id", localID).Error
+
+		return err
+	})
+
+	if err != nil {
 		return nil, err
 	}
 

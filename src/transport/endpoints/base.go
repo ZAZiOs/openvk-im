@@ -75,6 +75,8 @@ func (r *Router) BasicHandler(c *gin.Context) {
 		"messages.getHistoryAttachments": history.GetHistoryAttachments,
 
 		"messages.createChat":                  chats.CreateChat,
+		"messages.addChatUser":                 chats.AddChatUser,
+		"messages.removeChatUser":              chats.RemoveChatUser,
 		"messages.getConversations":            chats.GetConversations,
 		"messages.getConversationMembers":      chats.GetConversationMembers,
 		"messages.getConversationsById":        chats.GetConversationsById,
