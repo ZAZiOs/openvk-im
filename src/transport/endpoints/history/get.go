@@ -109,13 +109,68 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	if c.Query("extended") == "1" {
-		var userIDs []int64
-		var groupIDs []int64
+		var userIDs, groupIDs, chatIDs []int64
+
 		core.CollectAllEntityIDs(responseItems, &userIDs, &groupIDs)
 
-		response["profiles"] = userIDs
-		response["groups"] = groupIDs
+		if peerID > 2000000000 {
+			var members []db_models.ConversationMember
+			db.Instance.Where("peer_id = ? AND left_at IS NULL", peerID).Find(&members)
+
+			for _, m := range members {
+				addID(m.UserID, &userIDs, &groupIDs, &chatIDs)
+				addID(m.InvitedBy, &userIDs, &groupIDs, &chatIDs)
+			}
+		} else {
+			participants := []int64{currentUserID, peerID}
+			for _, p := range participants {
+				addID(p, &userIDs, &groupIDs, &chatIDs)
+			}
+		}
+
+		response["profiles"] = uniqueIDs(userIDs)
+		response["groups"] = uniqueIDs(groupIDs)
 	}
 
 	c.JSON(http.StatusOK, gin.H{"response": response})
+}
+
+func getPeerType(peerID int64) string {
+	if peerID > 2000000000 {
+		return "chat"
+	}
+	if peerID < 0 {
+		return "community"
+	}
+	return "user"
+}
+
+func uniqueIDs(ids []int64) []int64 {
+	m := make(map[int64]bool)
+	var res []int64
+	for _, id := range ids {
+		if !m[id] {
+			m[id] = true
+			res = append(res, id)
+		}
+	}
+	return res
+}
+
+func buildInPairs(keys map[string]uint64) [][]interface{} {
+	res := make([][]interface{}, 0, len(keys))
+	for k, v := range keys {
+		res = append(res, []interface{}{k, v})
+	}
+	return res
+}
+
+func addID(id int64, u *[]int64, g *[]int64, c *[]int64) {
+	if id > 2000000000 {
+		*c = append(*c, id)
+	} else if id > 0 && id < 2000000000 {
+		*u = append(*u, id)
+	} else if id < 0 {
+		*g = append(*g, -id)
+	}
 }

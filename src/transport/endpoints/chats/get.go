@@ -35,17 +35,18 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 
 	query := db.Instance.Table("conversation_members").
 		Select(`
-			conversation_members.*, 
-			COUNT(*) OVER() as total_count,
-			SUM(CASE WHEN last_message_id > last_read_id THEN 1 ELSE 0 END) OVER() as total_unread
-		`).
-		Where("user_id = ? AND left_at IS NULL", currentUserID)
+            conversation_members.*, 
+            COUNT(*) OVER() as total_count,
+            SUM(CASE WHEN conversation_members.last_message_id > conversation_members.last_read_id THEN 1 ELSE 0 END) OVER() as total_unread
+        `).
+		Joins("LEFT JOIN messages ON messages.chat_id = conversation_members.internal_chat_id AND messages.local_id = conversation_members.last_message_id").
+		Where("conversation_members.user_id = ? AND conversation_members.left_at IS NULL", currentUserID)
 
 	if filter == "unread" {
-		query = query.Where("last_message_id > last_read_id")
+		query = query.Where("conversation_members.last_message_id > conversation_members.last_read_id")
 	}
 
-	err := query.Order("last_message_id DESC").
+	err := query.Order("messages.created_at DESC, messages.id DESC").
 		Preload("Conversation").
 		Limit(count).Offset(offset).Find(&rows).Error
 
