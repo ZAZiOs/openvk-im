@@ -1,0 +1,12 @@
+services:
+  openvk-im:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: openvk-im-server
+    restart: unless-stopped
+    network_mode: "host"
+    volumes:
+      - .env:/root/.env
+    environment:
+      - APP_ENV=production
