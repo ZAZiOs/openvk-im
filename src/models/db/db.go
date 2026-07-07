@@ -136,6 +136,8 @@ type VKApiMessage struct {
 	ID              uint64         `json:"id"`
 	GlobalID        uint64         `json:"global_id"`
 	Date            int64          `json:"date"`
+	IsEdited        bool           `json:"edited"`
+	EditedAt        int64          `json:"edited_at,omitempty"`
 	PeerID          int64          `json:"peer_id"`
 	FromID          int64          `json:"from_id"`
 	Out             int            `json:"out"`
@@ -237,6 +239,13 @@ func (m *Message) ToVKApiStructBatch(depth int, currentUserID int64, requestedPe
 				vkMsg.ForwardMessages = append(vkMsg.ForwardMessages, fwdMsg.ToVKApiStructBatch(depth-1, currentUserID, requestedPeerID, cache))
 			}
 		}
+	}
+
+	if m.EditedAt != nil {
+		vkMsg.IsEdited = true
+		vkMsg.EditedAt = m.EditedAt.Unix()
+	} else {
+		vkMsg.IsEdited = false
 	}
 
 	return vkMsg
