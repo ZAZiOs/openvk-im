@@ -45,31 +45,50 @@ func GetMember(tx *gorm.DB, chatID string, userID int64) (*db_models.Conversatio
 
 func NextLocalID(tx *gorm.DB, chatID string, fromID int64) (uint64, error) {
 	var conv db_models.Conversation
+	var maxID uint64
 
-	result := tx.Model(&conv).
+	err := tx.Set("gorm:query_option", "FOR UPDATE").
 		Where("internal_id = ?", chatID).
-		Update("last_message_id", gorm.Expr("last_message_id + 1"))
+		First(&conv).Error
 
-	if result.Error != nil {
-		return 0, result.Error
+	isNewConv := false
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			isNewConv = true
+		} else {
+			return 0, err
+		}
 	}
 
-	if result.RowsAffected == 0 {
+	err = tx.Table("messages").
+		Unscoped().
+		Where("chat_id = ?", chatID).
+		Select("COALESCE(MAX(local_id), 0)").
+		Row().
+		Scan(&maxID)
+
+	if err != nil {
+		return 0, err
+	}
+
+	nextID := maxID + 1
+
+	if isNewConv {
 		newConv := db_models.Conversation{
 			InternalID:    chatID,
-			LastMessageID: 1,
+			LastMessageID: nextID,
 		}
 		if err := tx.Create(&newConv).Error; err != nil {
 			return 0, err
 		}
-		return 1, nil
+	} else {
+		err = tx.Model(&conv).Update("last_message_id", nextID).Error
+		if err != nil {
+			return 0, err
+		}
 	}
 
-	if err := tx.Select("last_message_id").First(&conv, "internal_id = ?", chatID).Error; err != nil {
-		return 0, err
-	}
-
-	return conv.LastMessageID, nil
+	return nextID, nil
 }
 
 func MarkAsRead(tx *gorm.DB, chatID string, userID int64, messageID uint64) error {
