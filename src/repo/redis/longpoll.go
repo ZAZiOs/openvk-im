@@ -111,7 +111,7 @@ func (r *Repo) GetUpdates(ctx context.Context, userID int64, lastTS uint64) ([]l
 		}
 	}
 
-	res, err := r.Client.ZRangeArgs(ctx, redis.ZRangeArgs{
+	res, err := r.Client.ZRangeArgsWithScores(ctx, redis.ZRangeArgs{
 		Key:     key,
 		ByScore: true,
 		Start:   fmt.Sprintf("(%d", lastTS),
@@ -123,9 +123,11 @@ func (r *Repo) GetUpdates(ctx context.Context, userID int64, lastTS uint64) ([]l
 	}
 
 	events := make([]lp_models.VKEvent, 0, len(res))
+	var highestFetchedTS uint64 = 0
+
 	for _, v := range res {
 		var stored StoredEvent
-		if err := json.Unmarshal([]byte(v), &stored); err != nil {
+		if err := json.Unmarshal([]byte(v.Member.(string)), &stored); err != nil {
 			continue
 		}
 
@@ -133,11 +135,19 @@ func (r *Repo) GetUpdates(ctx context.Context, userID int64, lastTS uint64) ([]l
 			ev := factory()
 			if err := json.Unmarshal(stored.Data, ev); err == nil {
 				events = append(events, ev)
+				if uint64(v.Score) > highestFetchedTS {
+					highestFetchedTS = uint64(v.Score)
+				}
 			}
 		}
 	}
 
 	newTS, _ := r.GetUserTS(ctx, userID)
+
+	if highestFetchedTS > newTS {
+		newTS = highestFetchedTS
+		r.SetUserTS(ctx, userID, newTS)
+	}
 	if newTS < lastTS {
 		newTS = lastTS
 	}
@@ -170,6 +180,7 @@ func (r *Repo) PushEvent(ctx context.Context, userID int64, eventType string, ev
 	pipe.ZAdd(ctx, eventsKey, redis.Z{Score: float64(newTS), Member: stored})
 	pipe.ZRemRangeByRank(ctx, eventsKey, 0, -201)
 	pipe.Expire(ctx, eventsKey, 48*time.Hour)
+	pipe.Expire(ctx, tsKey, 48*time.Hour)
 
 	_, err := pipe.Exec(ctx)
 	return uint64(newTS), newPTS, err
@@ -191,6 +202,7 @@ func (r *Repo) PushEphemeralEvent(ctx context.Context, userID int64, eventType s
 	pipe.ZAdd(ctx, eventsKey, redis.Z{Score: float64(newTS), Member: stored})
 	pipe.ZRemRangeByRank(ctx, eventsKey, 0, -51)
 	pipe.Expire(ctx, eventsKey, 10*time.Minute)
+	pipe.Expire(ctx, tsKey, 48*time.Hour)
 
 	_, err := pipe.Exec(ctx)
 	return err
