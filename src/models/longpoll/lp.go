@@ -53,11 +53,12 @@ type VKApiMessagesWithCount struct {
 // Attachments
 
 type LPAttachments struct {
-	Items  []LPAttachmentItem
-	Source string
-	Mid    string
-	Emoji  bool
-	From   string
+	Items   []LPAttachmentItem
+	Source  string
+	Mid     string
+	Emoji   bool
+	From    string
+	ReplyTo string
 }
 
 type LPAttachmentItem struct {
@@ -85,6 +86,9 @@ func (a LPAttachments) ToMap() map[string]interface{} {
 	}
 	if a.From != "" {
 		res["from"] = a.From
+	}
+	if a.ReplyTo != "" {
+		res["reply_to"] = a.ReplyTo
 	}
 
 	return res
