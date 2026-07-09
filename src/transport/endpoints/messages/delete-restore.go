@@ -23,7 +23,8 @@ func Delete(c *gin.Context, r *core.BaseHandler) {
 
 	peerID, _ := strconv.ParseInt(c.Query("peer_id"), 10, 64)
 	idsStr := c.Query("message_ids")
-	deleteAll := c.Query("delete_for_all") == "1"
+	// пока-что по умолчанию удаление происходит для всех. надо пересмотреть это потом.
+	//deleteAll := c.Query("delete_for_all") == "1"
 
 	if peerID == 0 || idsStr == "" {
 		r.Reject(c, 100, "One of the parameters is missing: peer_id or message_ids")
@@ -68,8 +69,8 @@ func Delete(c *gin.Context, r *core.BaseHandler) {
 
 			results[strconv.FormatUint(msg.LocalID, 10)] = 1
 
-			canDeleteForAll := deleteAll && msg.FromID == currentUserID && time.Since(msg.CreatedAt).Hours() <= 24
-			r.SendFlagsUpdate(currentUserID, peerID, msg.LocalID, newFlags, canDeleteForAll)
+			//canDeleteForAll := deleteAll && msg.FromID == currentUserID && time.Since(msg.CreatedAt).Hours() <= 24
+			r.SendFlagsUpdate(currentUserID, chatID, msg.LocalID, newFlags, true)
 		}
 
 		if len(msgs) > 0 {
@@ -123,7 +124,7 @@ func Restore(c *gin.Context, r *core.BaseHandler) {
 
 		chat.RefreshChatLastMessage(tx, chatID)
 
-		r.SendFlagsUpdate(currentUserID, peerID, msg.LocalID, newFlags, false)
+		r.SendFlagsUpdate(currentUserID, chatID, msg.LocalID, newFlags, true)
 		return nil
 	})
 

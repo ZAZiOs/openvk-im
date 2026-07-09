@@ -11,6 +11,7 @@ import (
 	"ovk-im/src/db"
 	db_models "ovk-im/src/models/db"
 	lp_models "ovk-im/src/models/longpoll"
+	"ovk-im/src/repo/chat"
 	redis "ovk-im/src/repo/redis"
 	"ovk-im/src/repo/search"
 	"ovk-im/src/transport/broadcaster"
@@ -150,24 +151,30 @@ func (r *BaseHandler) BroadcastMarkAsRead(ctx context.Context, peerID int64, use
 	}(peerID, userID, lastReadID)
 }
 
-func (r *BaseHandler) SendFlagsUpdate(uid int64, peerID int64, localID uint64, flags uint64, forAll bool) {
+func (r *BaseHandler) SendFlagsUpdate(uid int64, chatID string, localID uint64, flags uint64, forAll bool) {
 	go func() {
-		event := lp_models.MsgReplaceFlagsEvent{
-			MessageID: localID,
-			Flags:     lp_models.MessageFlags{Value: lp_models.MessageFlag(flags)},
-			PeerID:    peerID,
-		}
-
 		if forAll {
 			var members []int64
-			r.DB.Model(&db_models.ConversationMember{}).Where("peer_id = ?", peerID).Pluck("user_id", &members)
+			r.DB.Model(&db_models.ConversationMember{}).Where("internal_chat_id = ?", chatID).Pluck("user_id", &members)
 
 			for _, memberID := range members {
-				r.LPRepo.PushEvent(context.Background(), memberID, "msg_flags_replace", event)
+				event := lp_models.MsgReplaceFlagsEvent{
+					MessageID: localID,
+					Flags:     lp_models.MessageFlags{Value: lp_models.MessageFlag(flags)},
+					PeerID:    chat.DerivePeerID(chatID, memberID),
+				}
+
+				r.LPRepo.PushEvent(context.Background(), memberID, "msg_replace_flags", event)
 				r.Broadcaster.Notify(memberID)
 			}
 		} else {
-			r.LPRepo.PushEvent(context.Background(), uid, "msg_flags_replace", event)
+			event := lp_models.MsgReplaceFlagsEvent{
+				MessageID: localID,
+				Flags:     lp_models.MessageFlags{Value: lp_models.MessageFlag(flags)},
+				PeerID:    chat.DerivePeerID(chatID, uid),
+			}
+
+			r.LPRepo.PushEvent(context.Background(), uid, "msg_replace_flags", event)
 			r.Broadcaster.Notify(uid)
 		}
 	}()

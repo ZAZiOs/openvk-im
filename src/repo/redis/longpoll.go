@@ -255,7 +255,22 @@ func (r *Repo) GetUserPTS(ctx context.Context, userID int64) (uint64, error) {
 
 func isHistoryEvent(t string) bool {
 	switch t {
-	case "msg_new", "msg_delete", "msg_flags_replace", "read_in", "read_out":
+	case
+		"new_msg",
+		"msg_update",
+		"msg_delete",
+		"msg_replace_flags",
+		"msg_set_flags",
+		"msg_reset_flags",
+		"mass_delete",
+		"mass_restore",
+		"chat_reset_flags",
+		"chat_replace_flags",
+		"chat_set_flags",
+		"chat_something_changed",
+		"chat_update",
+		"read_in",
+		"read_out":
 		return true
 	}
 	return false
