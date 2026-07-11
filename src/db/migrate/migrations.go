@@ -52,8 +52,14 @@ func (LegacyMessage) TableName() string {
 	return "messages"
 }
 
+type AttachmentResult struct {
+	MessageID int64 `gorm:"column:message_id"`
+	Owner     int64 `gorm:"column:owner"`
+	VirtualID int64 `gorm:"column:virtual_id"`
+}
+
 func MigrateFromLegacy() {
-	log.Println("Starting experimental migration from OpenVK legacy messages...")
+	log.Println("Starting stream + batch migration from OpenVK legacy messages...")
 
 	user := env.Get("DB_USER", "root")
 	pass := env.Get("DB_PASS", "")
@@ -69,7 +75,6 @@ func MigrateFromLegacy() {
 	if dbx.Instance == nil {
 		dbx.Connect()
 	}
-
 	dbx.Instance.Logger = dbx.Instance.Logger.LogMode(logger.Silent)
 
 	secret := env.Get("SECRET_KEY", "error")
@@ -82,140 +87,209 @@ func MigrateFromLegacy() {
 	localIDCache := make(map[string]uint64)
 	memberCache := make(map[string]bool)
 
-	var legacyMessages []LegacyMessage
+	rows, err := legacyDB.Model(&LegacyMessage{}).Rows()
+	if err != nil {
+		log.Fatalf("Failed to open rows stream: %v", err)
+	}
+	defer rows.Close()
+
 	batchSize := 2000
+	buffer := make([]LegacyMessage, 0, batchSize)
+	batchCount := 0
 
-	result := legacyDB.FindInBatches(&legacyMessages, batchSize, func(tx *gorm.DB, batch int) error {
-		return dbx.Instance.Transaction(func(targetTx *gorm.DB) error {
-			var messagesToInsert []dbm.Message
-			var indexesToInsert []dbm.MessageSearchIndex
-			var membersToUpsert []dbm.ConversationMember
+	for rows.Next() {
+		var msg LegacyMessage
+		if err := legacyDB.ScanRows(rows, &msg); err != nil {
+			log.Printf("Scan row error: %v", err)
+			continue
+		}
 
-			touchedChatsInBatch := make(map[string]bool)
+		buffer = append(buffer, msg)
 
-			var missingChatIDs []string
-			for _, msg := range legacyMessages {
-				currentUserID := int64(msg.SenderID)
-				peerID := int64(msg.RecipientID)
-				chatID := chat.GetInternalChatID(peerID, currentUserID)
-				if _, ok := localIDCache[chatID]; !ok {
-					missingChatIDs = append(missingChatIDs, chatID)
-					localIDCache[chatID] = 0 // Временная заглушка
+		if len(buffer) >= batchSize {
+			batchCount++
+			if err := processAndFlushBatch(legacyDB, dbx.Instance, buffer, searchRepo, localIDCache, memberCache); err != nil {
+				log.Printf("Failed to flush batch %d: %v", batchCount, err)
+			}
+			buffer = buffer[:0]
+			log.Printf("Processed batch %d", batchCount)
+		}
+	}
+
+	if len(buffer) > 0 {
+		batchCount++
+		if err := processAndFlushBatch(legacyDB, dbx.Instance, buffer, searchRepo, localIDCache, memberCache); err != nil {
+			log.Printf("Failed to flush final batch %d: %v", batchCount, err)
+		}
+		log.Printf("Processed final batch %d", batchCount)
+	}
+
+	log.Println("Stream migration finished successfully!")
+}
+
+func processAndFlushBatch(legacyDB, targetDB *gorm.DB, legacyMessages []LegacyMessage, searchRepo *search.Repository, localIDCache map[string]uint64, memberCache map[string]bool) error {
+	return targetDB.Transaction(func(targetTx *gorm.DB) error {
+		var messagesToInsert []dbm.Message
+		var indexesToInsert []dbm.MessageSearchIndex
+		var membersToUpsert []dbm.ConversationMember
+		touchedChatsInBatch := make(map[string]bool)
+
+		msgIDs := make([]int64, 0, len(legacyMessages))
+		var missingChatIDs []string
+
+		for _, msg := range legacyMessages {
+			msgIDs = append(msgIDs, msg.ID)
+
+			currentUserID := int64(msg.SenderID)
+			peerID := int64(msg.RecipientID)
+			chatID := chat.GetInternalChatID(peerID, currentUserID)
+
+			if _, ok := localIDCache[chatID]; !ok {
+				missingChatIDs = append(missingChatIDs, chatID)
+				localIDCache[chatID] = 0
+			}
+		}
+
+		if len(missingChatIDs) > 0 {
+			type Result struct {
+				ChatID string
+				MaxID  uint64
+			}
+			var results []Result
+			targetTx.Model(&dbm.Message{}).
+				Select("chat_id, COALESCE(max(local_id), 0) as max_id").
+				Where("chat_id IN ?", missingChatIDs).
+				Group("chat_id").
+				Scan(&results)
+
+			for _, r := range results {
+				localIDCache[r.ChatID] = r.MaxID
+			}
+		}
+
+		var attachResults []AttachmentResult
+		legacyDB.Table("attachments").
+			Select("attachments.target_id as message_id, photos.owner, photos.virtual_id").
+			Joins("JOIN photos ON photos.id = attachments.attachable_id").
+			Where("attachments.target_type = ? AND attachments.attachable_type = ? AND attachments.target_id IN ?",
+				"openvk\\Web\\Models\\Entities\\Message",
+				"openvk\\Web\\Models\\Entities\\Photo",
+				msgIDs,
+			).Scan(&attachResults)
+
+		attachmentsMap := make(map[int64]string)
+		for _, ar := range attachResults {
+			attachStr := fmt.Sprintf("photo%d_%d", ar.Owner, ar.VirtualID)
+			if existing, ok := attachmentsMap[ar.MessageID]; ok {
+				attachmentsMap[ar.MessageID] = existing + "," + attachStr
+			} else {
+				attachmentsMap[ar.MessageID] = attachStr
+			}
+		}
+
+		for _, msg := range legacyMessages {
+			currentUserID := int64(msg.SenderID)
+			peerID := int64(msg.RecipientID)
+			chatID := chat.GetInternalChatID(peerID, currentUserID)
+
+			localIDCache[chatID]++
+			currentLocalID := localIDCache[chatID]
+			touchedChatsInBatch[chatID] = true
+
+			usersToCheck := []int64{currentUserID}
+			if peerID < 2000000000 && peerID != currentUserID {
+				usersToCheck = append(usersToCheck, peerID)
+			}
+
+			for _, uid := range usersToCheck {
+				cacheKey := fmt.Sprintf("%s_%d", chatID, uid)
+				if !memberCache[cacheKey] {
+					membersToUpsert = append(membersToUpsert, dbm.ConversationMember{
+						InternalChatID: chatID,
+						UserID:         uid,
+						JoinedAt:       time.Unix(msg.Created, 0),
+						IsAdmin:        true,
+						LastMessageID:  currentLocalID,
+					})
+					memberCache[cacheKey] = true
 				}
 			}
 
-			if len(missingChatIDs) > 0 {
-				type Result struct {
-					ChatID string
-					MaxID  uint64
-				}
-				var results []Result
-				targetTx.Model(&dbm.Message{}).
-					Select("chat_id, COALESCE(max(local_id), 0) as max_id").
-					Where("chat_id IN ?", missingChatIDs).
-					Group("chat_id").
-					Scan(&results)
+			msgTime := time.Unix(msg.Created, 0)
 
-				for _, r := range results {
-					localIDCache[r.ChatID] = r.MaxID
-				}
+			var updatedTime *time.Time
+			if msg.Edited > 0 {
+				t := time.Unix(msg.Edited, 0)
+				updatedTime = &t
 			}
 
-			for _, msg := range legacyMessages {
-				currentUserID := int64(msg.SenderID)
-				peerID := int64(msg.RecipientID)
-				chatID := chat.GetInternalChatID(peerID, currentUserID)
-
-				localIDCache[chatID]++
-				currentLocalID := localIDCache[chatID]
-				touchedChatsInBatch[chatID] = true
-
-				usersToCheck := []int64{currentUserID}
-				if peerID < 2000000000 && peerID != currentUserID {
-					usersToCheck = append(usersToCheck, peerID)
-				}
-
-				for _, uid := range usersToCheck {
-					cacheKey := fmt.Sprintf("%s_%d", chatID, uid)
-					if !memberCache[cacheKey] {
-						membersToUpsert = append(membersToUpsert, dbm.ConversationMember{
-							InternalChatID: chatID,
-							UserID:         uid,
-							JoinedAt:       time.Unix(msg.Created, 0),
-							IsAdmin:        true,
-							LastMessageID:  currentLocalID,
-						})
-						memberCache[cacheKey] = true
-					}
-				}
-
-				msgTime := time.Unix(msg.Created, 0)
-				var updatedTime *time.Time
-				if msg.Edited > 0 {
-					t := time.Unix(msg.Edited, 0)
-					updatedTime = &t
-				}
-
-				messagesToInsert = append(messagesToInsert, dbm.Message{
-					ChatID:    chatID,
-					LocalID:   currentLocalID,
-					FromID:    currentUserID,
-					Text:      dbm.EncryptedJSON(msg.Content),
-					CreatedAt: msgTime,
-					EditedAt:  updatedTime,
-				})
+			var deletedAt *time.Time
+			var flags uint64 = 0
+			if msg.Deleted {
+				flags = 128
+				now := time.Now()
+				deletedAt = &now
 			}
 
-			if len(membersToUpsert) > 0 {
-				if err := targetTx.Clauses(clause.OnConflict{DoNothing: true}).Create(&membersToUpsert).Error; err != nil {
-					return err
-				}
-			}
+			messagesToInsert = append(messagesToInsert, dbm.Message{
+				ChatID:      chatID,
+				LocalID:     currentLocalID,
+				FromID:      currentUserID,
+				Text:        dbm.EncryptedJSON(msg.Content),
+				Attachments: dbm.EncryptedJSON(attachmentsMap[msg.ID]),
+				Flags:       flags,
+				CreatedAt:   msgTime,
+				EditedAt:    updatedTime,
+				DeletedAt:   deletedAt,
+			})
+		}
 
+		if len(membersToUpsert) > 0 {
+			if err := targetTx.Clauses(clause.OnConflict{DoNothing: true}).Create(&membersToUpsert).Error; err != nil {
+				return err
+			}
+		}
+
+		if len(messagesToInsert) > 0 {
 			if err := targetTx.Create(&messagesToInsert).Error; err != nil {
 				return err
 			}
+		}
 
-			for i, m := range messagesToInsert {
-				legacyMsg := legacyMessages[i]
-				if !legacyMsg.Deleted && legacyMsg.Content != "" {
-					idx := searchRepo.GenerateBlindIndexes(m.ID, m.ChatID, string(legacyMsg.Content))
-					indexesToInsert = append(indexesToInsert, idx...)
-				}
+		for i, m := range messagesToInsert {
+			legacyMsg := legacyMessages[i]
+			if !legacyMsg.Deleted && legacyMsg.Content != "" {
+				idx := searchRepo.GenerateBlindIndexes(m.ID, m.ChatID, string(legacyMsg.Content))
+				indexesToInsert = append(indexesToInsert, idx...)
 			}
-			if len(indexesToInsert) > 0 {
-				if err := targetTx.Create(&indexesToInsert).Error; err != nil {
-					return err
-				}
+		}
+
+		if len(indexesToInsert) > 0 {
+			if err := targetTx.Clauses(clause.OnConflict{DoNothing: true}).Create(&indexesToInsert).Error; err != nil {
+				return err
 			}
+		}
 
-			for chatID := range touchedChatsInBatch {
-				lastID := localIDCache[chatID]
+		for chatID := range touchedChatsInBatch {
+			lastID := localIDCache[chatID]
+			targetTx.Model(&dbm.ConversationMember{}).
+				Where("internal_chat_id = ?", chatID).
+				Update("last_message_id", lastID)
 
-				targetTx.Model(&dbm.ConversationMember{}).
-					Where("internal_chat_id = ?", chatID).
-					Update("last_message_id", lastID)
+			err := targetTx.Clauses(clause.OnConflict{
+				Columns:   []clause.Column{{Name: "internal_id"}},
+				DoUpdates: clause.Assignments(map[string]interface{}{"last_message_id": lastID}),
+			}).Create(&dbm.Conversation{
+				InternalID:    chatID,
+				LastMessageID: lastID,
+				CreatedAt:     time.Now(),
+			}).Error
 
-				err := targetTx.Clauses(clause.OnConflict{
-					Columns:   []clause.Column{{Name: "internal_id"}},
-					DoUpdates: clause.Assignments(map[string]interface{}{"last_message_id": lastID}),
-				}).Create(&dbm.Conversation{
-					InternalID:    chatID,
-					LastMessageID: lastID,
-				}).Error
-				if err != nil {
-					return err
-				}
+			if err != nil {
+				return err
 			}
+		}
 
-			log.Printf("Batch %d processed", batch)
-			return nil
-		})
+		return nil
 	})
-
-	if result.Error != nil {
-		log.Printf("Migration error: %v", result.Error)
-	} else {
-		log.Println("Migration finished successfully!")
-	}
 }
