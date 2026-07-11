@@ -138,14 +138,8 @@ func MigrateFromLegacy() {
 				for _, uid := range usersToCheck {
 					cacheKey := fmt.Sprintf("%s_%d", chatID, uid)
 					if !memberCache[cacheKey] {
-						pID := peerID
-						if uid == peerID {
-							pID = currentUserID
-						}
-
 						membersToUpsert = append(membersToUpsert, dbm.ConversationMember{
 							InternalChatID: chatID,
-							PeerID:         pID,
 							UserID:         uid,
 							JoinedAt:       time.Unix(msg.Created, 0),
 							IsAdmin:        true,

@@ -16,11 +16,9 @@ const (
 
 type Conversation struct {
 	ID         uint64 `gorm:"primaryKey;autoIncrement" json:"-"`
-	PeerID     int64  `gorm:"index" json:"peer_id"`
 	InternalID string `gorm:"primaryKey;type:varchar(100)" json:"internal_id"`
 
-	PeerType uint8  `gorm:"type:tinyint;default:0;index" json:"peer_type"`
-	Title    string `gorm:"type:varchar(255)" json:"title"`
+	Title string `gorm:"type:varchar(255)" json:"title"`
 
 	LastMessageID uint64 `json:"last_message_id"`
 
@@ -35,11 +33,10 @@ type Conversation struct {
 }
 
 type ConversationMember struct {
-	PeerID         int64  `gorm:"primaryKey;index:idx_member_lookup" json:"peer_id"`
 	UserID         int64  `gorm:"primaryKey;index:idx_user_active_chats,priority:1" json:"user_id"`
 	InternalChatID string `gorm:"primaryKey;index:idx_member_lookup;type:varchar(100)"`
 
-	StartMessageID uint64 `json:"start_message_id"`
+	StartMessageID uint64 `json:"start_message_id"` // UNUSED ATM И ЭТО ПЛОХО!
 	LastReadID     uint64 `json:"last_read_id"`
 
 	IsAdmin bool  `gorm:"type:tinyint(1)" json:"is_admin"`
@@ -292,20 +289,54 @@ type VKChatSettings struct {
 	ActiveIDs     interface{} `json:"active_ids,omitempty"`
 }
 
+func derivePeerId(chatID string, currentUserID int64) int64 {
+	if strings.HasPrefix(chatID, "c") {
+		id, _ := strconv.ParseInt(chatID[1:], 10, 64)
+		return id + 2000000000
+	}
+
+	if strings.HasPrefix(chatID, "g") {
+		parts := strings.Split(chatID[1:], "_")
+		if len(parts) < 2 {
+			return 0
+		}
+		id1, _ := strconv.ParseInt(parts[0], 10, 64)
+		id2, _ := strconv.ParseInt(parts[1], 10, 64)
+
+		if id1 == currentUserID {
+			return id2
+		}
+		return id1
+	}
+
+	if strings.HasPrefix(chatID, "dm") {
+		parts := strings.Split(chatID[2:], "_")
+		id1, _ := strconv.ParseInt(parts[0], 10, 64)
+		id2, _ := strconv.ParseInt(parts[1], 10, 64)
+		if id1 == currentUserID {
+			return id2
+		}
+		return id1
+	}
+	return 0
+}
+
 func (c *Conversation) ToVKApiStruct(tx *gorm.DB, currentUserID int64, member *ConversationMember, activeIDs []int64) VKApiConversation {
 	peerType := "user"
-	localID := c.PeerID
-	if c.PeerID > 2000000000 {
+	PeerID := derivePeerId(c.InternalID, currentUserID)
+
+	localID := PeerID
+	if PeerID > 2000000000 {
 		peerType = "chat"
-		localID = c.PeerID - 2000000000
-	} else if c.PeerID < 0 {
+		localID = PeerID - 2000000000
+	} else if PeerID < 0 {
 		peerType = "group"
-		localID = -c.PeerID
+		localID = -PeerID
 	}
 
 	conv := VKApiConversation{
 		Peer: VKApiPeer{
-			ID:      c.PeerID,
+			ID:      PeerID,
 			Type:    peerType,
 			LocalID: localID,
 		},
@@ -344,7 +375,7 @@ func (c *Conversation) ToVKApiStruct(tx *gorm.DB, currentUserID int64, member *C
 		}
 
 		var mCount int64
-		tx.Model(&ConversationMember{}).Where("peer_id = ? AND left_at IS NULL", c.PeerID).Count(&mCount)
+		tx.Model(&ConversationMember{}).Where("internal_chat_id = ? AND left_at IS NULL", c.InternalID).Count(&mCount)
 		settings.MembersCount = int(mCount)
 
 		if len(activeIDs) > 6 {
@@ -356,7 +387,7 @@ func (c *Conversation) ToVKApiStruct(tx *gorm.DB, currentUserID int64, member *C
 		if c.PinnedMsgID > 0 {
 			var pMsg Message
 			if err := tx.Where("chat_id = ? AND local_id = ?", c.InternalID, c.PinnedMsgID).First(&pMsg).Error; err == nil {
-				res := pMsg.ToVKApiStruct(tx, 0, currentUserID, c.PeerID)
+				res := pMsg.ToVKApiStruct(tx, 0, currentUserID, PeerID)
 				settings.PinnedMessage = res
 			}
 		}

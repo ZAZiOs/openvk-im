@@ -29,7 +29,7 @@ func SearchConversations(c *gin.Context, r *core.BaseHandler) {
 		Joins("LEFT JOIN conversations ON conversations.internal_id = conversation_members.internal_chat_id").
 		Where("conversation_members.user_id = ? AND conversation_members.left_at IS NULL", currentUserID).
 		Where(
-			db.Instance.Where("conversation_members.peer_id < 2000000000").
+			db.Instance.Where("conversation_members.internal_chat_id NOT LIKE ?", "c%").
 				Or("conversations.title LIKE ?", "%"+q+"%"),
 		)
 
@@ -71,7 +71,7 @@ func SearchConversations(c *gin.Context, r *core.BaseHandler) {
 		}
 
 		convObj := gin.H{
-			"peer":            gin.H{"id": pID, "type": getPeerType(pID)},
+			"peer":            gin.H{"id": pID, "type": getPeerType(m.InternalChatID)},
 			"last_message_id": m.LastMessageID,
 			"in_read":         m.LastReadID,
 			"out_read":        m.LastMessageID,

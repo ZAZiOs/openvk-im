@@ -71,7 +71,7 @@ func MarkAsRead(c *gin.Context, r *core.BaseHandler) {
 
 			for cID, task := range tks {
 				if err := chat.MarkAsRead(db.Instance, cID, uid, task.maxLocalID); err == nil {
-					r.BroadcastMarkAsRead(ctx, task.pID, uid, task.maxLocalID)
+					r.BroadcastMarkAsRead(ctx, cID, uid, task.maxLocalID)
 				}
 			}
 		}(tasks, currentUserID)

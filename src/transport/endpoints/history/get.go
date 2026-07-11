@@ -7,6 +7,7 @@ import (
 	"ovk-im/src/repo/chat"
 	"ovk-im/src/transport/endpoints/core"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -42,7 +43,9 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 	startID, _ := strconv.ParseInt(c.Query("start_message_id"), 10, 64)
 	rev, _ := strconv.Atoi(c.DefaultQuery("rev", "0"))
 
-	if peerID > 2000000000 {
+	isGroupChat := strings.HasPrefix(chatID, "c")
+
+	if isGroupChat {
 		inChat, err := chat.IsUserInChat(nil, chatID, currentUserID)
 		if err != nil || !inChat {
 			r.Reject(c, 917, "You don't have access to this chat")
@@ -113,9 +116,9 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 
 		core.CollectAllEntityIDs(responseItems, &userIDs, &groupIDs)
 
-		if peerID > 2000000000 {
+		if isGroupChat {
 			var members []db_models.ConversationMember
-			db.Instance.Where("peer_id = ? AND left_at IS NULL", peerID).Find(&members)
+			db.Instance.Where("internal_chat_id = ? AND left_at IS NULL", chatID).Find(&members)
 
 			for _, m := range members {
 				addID(m.UserID, &userIDs, &groupIDs, &chatIDs)
@@ -133,16 +136,6 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{"response": response})
-}
-
-func getPeerType(peerID int64) string {
-	if peerID > 2000000000 {
-		return "chat"
-	}
-	if peerID < 0 {
-		return "community"
-	}
-	return "user"
 }
 
 func uniqueIDs(ids []int64) []int64 {

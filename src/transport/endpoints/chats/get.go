@@ -74,8 +74,7 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 		if row.LastMessageID > row.LastReadID {
 			unreadCheckIDs = append(unreadCheckIDs, row.InternalChatID)
 		}
-		pID := chat.DerivePeerID(row.InternalChatID, currentUserID)
-		if getPeerType(pID) == "chat" {
+		if getPeerType(row.InternalChatID) == "chat" {
 			chatIDsToFetchMembers = append(chatIDsToFetchMembers, row.InternalChatID)
 		}
 	}
@@ -163,7 +162,7 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 		}
 
 		conversationObj := gin.H{
-			"peer":            gin.H{"id": pID, "type": getPeerType(pID)},
+			"peer":            gin.H{"id": pID, "type": getPeerType(m.InternalChatID)},
 			"last_message_id": m.LastMessageID,
 			"in_read":         m.LastReadID,
 			"out_read":        m.LastMessageID,
@@ -179,7 +178,7 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 			conversationObj["current_pinned_message"] = gin.H{"id": conv.PinnedMsgID}
 		}
 
-		if getPeerType(pID) == "chat" {
+		if getPeerType(m.InternalChatID) == "chat" {
 			membersList := chatMembersMap[m.InternalChatID]
 			if membersList == nil {
 				membersList = []int64{}
@@ -200,7 +199,7 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 			}
 			addID(pID, &userIDs, &groupIDs, &chatIDs)
 
-			if getPeerType(pID) == "chat" {
+			if getPeerType(m.InternalChatID) == "chat" {
 				if membersList, ok := chatMembersMap[m.InternalChatID]; ok {
 					for _, memberID := range membersList {
 						addID(memberID, &userIDs, &groupIDs, &chatIDs)
@@ -234,11 +233,12 @@ func GetConversationMembers(c *gin.Context, r *core.BaseHandler) {
 		r.Reject(c, 100, "One of the parameters is missing: peer_id")
 		return
 	}
+	internalChatId := chat.GetInternalChatID(peerID, currentUserID)
 
 	extended := c.Query("extended") == "1"
 
 	var check db_models.ConversationMember
-	err := db.Instance.Where("peer_id = ? AND user_id = ? AND left_at IS NULL", peerID, currentUserID).First(&check).Error
+	err := db.Instance.Where("internal_chat_id = ? AND user_id = ? AND left_at IS NULL", internalChatId, currentUserID).First(&check).Error
 
 	if err != nil {
 		r.Reject(c, 917, "You don't have access to this chat")
@@ -250,7 +250,7 @@ func GetConversationMembers(c *gin.Context, r *core.BaseHandler) {
 	items := make([]gin.H, 0)
 
 	if peerID > 2000000000 {
-		db.Instance.Where("peer_id = ? AND left_at IS NULL", peerID).Find(&members)
+		db.Instance.Where("internal_chat_id = ? AND left_at IS NULL", internalChatId).Find(&members)
 
 		for _, m := range members {
 			item := gin.H{
@@ -306,15 +306,16 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 
 	extended := c.Query("extended") == "1"
 	parts := strings.Split(peerIDsStr, ",")
-	var targetPeerIDs []int64
+	var targetChatIDs []string
 	for _, p := range parts {
 		if id, err := strconv.ParseInt(strings.TrimSpace(p), 10, 64); err == nil {
-			targetPeerIDs = append(targetPeerIDs, id)
+			internalID := chat.GetInternalChatID(id, currentUserID)
+			targetChatIDs = append(targetChatIDs, internalID)
 		}
 	}
 
 	var rows []db_models.ConversationMember
-	err := db.Instance.Where("user_id = ? AND peer_id IN ? AND left_at IS NULL", currentUserID, targetPeerIDs).
+	err := db.Instance.Where("user_id = ? AND internal_chat_id IN ? AND left_at IS NULL", currentUserID, targetChatIDs).
 		Preload("Conversation").
 		Find(&rows).Error
 
@@ -329,7 +330,7 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 		if row.LastMessageID > 0 {
 			lastMsgKeys[row.InternalChatID] = row.LastMessageID
 		}
-		if getPeerType(row.PeerID) == "chat" {
+		if getPeerType(row.InternalChatID) == "chat" {
 			chatIDsToFetchMembers = append(chatIDsToFetchMembers, row.InternalChatID)
 		}
 	}
@@ -389,7 +390,7 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 	var userIDs, groupIDs, chatIDs []int64
 
 	for _, m := range rows {
-		pID := m.PeerID
+		pID := chat.DerivePeerID(m.InternalChatID, currentUserID)
 		lastMsg, hasMsg := msgMap[m.InternalChatID]
 
 		var msgVK interface{} = nil
@@ -398,7 +399,7 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 		}
 
 		convObj := gin.H{
-			"peer":            gin.H{"id": pID, "type": getPeerType(pID)},
+			"peer":            gin.H{"id": pID, "type": getPeerType(m.InternalChatID)},
 			"last_message_id": m.LastMessageID,
 			"in_read":         m.LastReadID,
 			"out_read":        m.LastMessageID,
@@ -410,7 +411,7 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 			convObj["current_pinned_message"] = gin.H{"id": m.Conversation.PinnedMsgID}
 		}
 
-		if getPeerType(pID) == "chat" {
+		if getPeerType(m.InternalChatID) == "chat" {
 			membersList := chatMembersMap[m.InternalChatID]
 			if membersList == nil {
 				membersList = []int64{}
@@ -431,7 +432,7 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 				addID(lastMsg.FromID, &userIDs, &groupIDs, &chatIDs)
 			}
 
-			if getPeerType(pID) == "chat" {
+			if getPeerType(m.InternalChatID) == "chat" {
 				if membersList, ok := chatMembersMap[m.InternalChatID]; ok {
 					for _, memberID := range membersList {
 						addID(memberID, &userIDs, &groupIDs, &chatIDs)
@@ -455,14 +456,17 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 	c.JSON(http.StatusOK, gin.H{"response": result})
 }
 
-func getPeerType(peerID int64) string {
-	if peerID > 2000000000 {
+func getPeerType(internalChatId string) string {
+	if strings.HasPrefix(internalChatId, "c") {
 		return "chat"
 	}
-	if peerID < 0 {
+	if strings.HasPrefix(internalChatId, "g") {
 		return "community"
 	}
-	return "user"
+	if strings.HasPrefix(internalChatId, "dm") {
+		return "user"
+	}
+	return "unknown"
 }
 
 func uniqueIDs(ids []int64) []int64 {

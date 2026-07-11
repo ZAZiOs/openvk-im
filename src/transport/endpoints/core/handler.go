@@ -107,8 +107,10 @@ func (r *BaseHandler) BroadcastChatSomethingChanged(ctx *gin.Context, peerID int
 		ctx := context.Background()
 		var memberIDs []int64
 
+		icID := chat.GetInternalChatID(pID, aID)
+
 		db.Instance.Model(&db_models.ConversationMember{}).
-			Where("peer_id = ? AND left_at IS NULL", pID).
+			Where("internal_chat_id = ? AND left_at IS NULL", icID).
 			Pluck("user_id", &memberIDs)
 
 		for _, uid := range memberIDs {
@@ -128,27 +130,43 @@ func (r *BaseHandler) BroadcastChatSomethingChanged(ctx *gin.Context, peerID int
 	}(peerID, actorID)
 }
 
-func (r *BaseHandler) BroadcastMarkAsRead(ctx context.Context, peerID int64, userID int64, lastReadID uint64) {
+func (r *BaseHandler) BroadcastMarkAsRead(ctx context.Context, chatID string, userID int64, lastReadID uint64) {
+	currentPeerID := chat.DerivePeerID(chatID, userID)
+
 	r.LPRepo.PushEvent(ctx, userID, "read_income_before", lp_models.ReadIncomeBeforeEvent{
-		PeerID:  peerID,
+		PeerID:  currentPeerID,
 		LocalID: lastReadID,
 	})
 	r.Broadcaster.Notify(userID)
 
-	go func(pID, uID int64, lrID uint64) {
+	go func(cID string, uID int64, lrID uint64, origPeerID int64) {
+		bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
 		var members []int64
-		db.Instance.Model(&db_models.ConversationMember{}).
-			Where("peer_id = ? AND user_id != ? AND left_at IS NULL", peerID, userID).
-			Pluck("user_id", &members)
+		err := db.Instance.Model(&db_models.ConversationMember{}).
+			Where("internal_chat_id = ? AND user_id != ? AND left_at IS NULL", cID, uID).
+			Pluck("user_id", &members).Error
+
+		if err != nil {
+			return
+		}
+
+		var targetPeerID int64
+		if strings.HasPrefix(cID, "c") {
+			targetPeerID = origPeerID
+		} else {
+			targetPeerID = uID
+		}
 
 		for _, mID := range members {
-			r.LPRepo.PushEvent(ctx, mID, "read_outcome_before", lp_models.ReadOutcomeBeforeEvent{
-				PeerID:  userID,
-				LocalID: lastReadID,
+			r.LPRepo.PushEvent(bgCtx, mID, "read_outcome_before", lp_models.ReadOutcomeBeforeEvent{
+				PeerID:  targetPeerID,
+				LocalID: lrID,
 			})
 			r.Broadcaster.Notify(mID)
 		}
-	}(peerID, userID, lastReadID)
+	}(chatID, userID, lastReadID, currentPeerID)
 }
 
 func (r *BaseHandler) SendFlagsUpdate(uid int64, chatID string, localID uint64, flags uint64, forAll bool) {
@@ -181,26 +199,30 @@ func (r *BaseHandler) SendFlagsUpdate(uid int64, chatID string, localID uint64, 
 }
 
 func (r *BaseHandler) SendUpdateEvent(peerID int64, localID uint64, text string, attachStr string, senderID int64) {
-	go func() {
-		lpAttach := lp_models.NewLPAttachments(attachStr)
-		lpAttach.From = strconv.FormatInt(senderID, 10)
+	internalChatID := chat.GetInternalChatID(peerID, senderID)
+
+	go func(pID int64, lID uint64, txt, attach string, sID int64, chatId string) {
+		lpAttach := lp_models.NewLPAttachments(attach)
+		lpAttach.From = strconv.FormatInt(sID, 10)
+
 		updateEvent := lp_models.UpdateMessageEvent{
-			MessageID:   localID,
-			PeerID:      peerID,
-			NewText:     text,
+			MessageID:   lID,
+			PeerID:      pID,
+			NewText:     txt,
 			Attachments: &lpAttach,
 			Timestamp:   uint64(time.Now().Unix()),
 		}
 
 		var recipients []int64
-		if peerID > 2000000000 {
+
+		if strings.HasPrefix(chatId, "c") {
 			r.DB.Model(&db_models.ConversationMember{}).
-				Where("peer_id = ? AND left_at IS NULL", peerID).
+				Where("internal_chat_id = ? AND left_at IS NULL", chatId).
 				Pluck("user_id", &recipients)
 		} else {
-			recipients = append(recipients, senderID)
-			if peerID != senderID {
-				recipients = append(recipients, peerID)
+			recipients = append(recipients, sID)
+			if pID != sID {
+				recipients = append(recipients, pID)
 			}
 		}
 
@@ -208,7 +230,7 @@ func (r *BaseHandler) SendUpdateEvent(peerID int64, localID uint64, text string,
 			r.LPRepo.PushEvent(context.Background(), uid, "msg_update", updateEvent)
 			r.Broadcaster.Notify(uid)
 		}
-	}()
+	}(peerID, localID, text, attachStr, senderID, internalChatID)
 }
 
 func CollectAllEntityIDs(items []db_models.VKApiMessage, userIDs *[]int64, groupIDs *[]int64) {
@@ -260,8 +282,10 @@ func (r *BaseHandler) SendChatFlagsUpdate(userID int64, peerID int64, flags uint
 }
 
 func (r *BaseHandler) UpdateChatFlags(userID int64, peerID int64, mask uint64, mode string) error {
+	internalChatID := chat.GetInternalChatID(peerID, userID)
+
 	var member db_models.ConversationMember
-	err := r.DB.Where("user_id = ? AND peer_id = ?", userID, peerID).First(&member).Error
+	err := r.DB.Where("user_id = ? AND internal_chat_id = ?", userID, internalChatID).First(&member).Error
 	if err != nil {
 		return err
 	}
@@ -276,7 +300,13 @@ func (r *BaseHandler) UpdateChatFlags(userID int64, peerID int64, mask uint64, m
 		newFlags = mask
 	}
 
-	r.DB.Model(&member).Update("flags", newFlags)
+	err = r.DB.Model(&db_models.ConversationMember{}).
+		Where("user_id = ? AND internal_chat_id = ?", userID, internalChatID).
+		Update("flags", newFlags).Error
+	if err != nil {
+		return err
+	}
+
 	r.SendChatFlagsUpdate(userID, peerID, newFlags)
 
 	return nil
@@ -297,7 +327,7 @@ func (r *BaseHandler) BackgroundDeleteChat(userID int64, peerID int64, internalC
 	}
 
 	err = tx.Model(&db_models.ConversationMember{}).
-		Where("user_id = ? AND peer_id = ?", userID, peerID).
+		Where("user_id = ? AND internal_chat_id = ?", userID, internalChatID).
 		Updates(updates).Error
 
 	if err != nil {

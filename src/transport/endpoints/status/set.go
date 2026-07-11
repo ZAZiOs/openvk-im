@@ -6,8 +6,10 @@ import (
 	dbx "ovk-im/src/db"
 	db_models "ovk-im/src/models/db"
 	lp_models "ovk-im/src/models/longpoll"
+	"ovk-im/src/repo/chat" // НОВОЕ: Добавлен импорт репозитория чата
 	"ovk-im/src/transport/endpoints/core"
 	"strconv"
+	"strings" // НОВОЕ: Добавлен импорт для проверки префиксов
 
 	"github.com/gin-gonic/gin"
 )
@@ -34,40 +36,34 @@ func SetActivity(c *gin.Context, r *core.BaseHandler) {
 		flag = 2
 	}
 
+	internalChatID := chat.GetInternalChatID(peerID, currentUserID)
+	isGroupChat := strings.HasPrefix(internalChatID, "c")
+
 	var eventType string
-	var recipients []int64
 	var event lp_models.VKEvent
 
-	if peerID > 2000000000 {
+	if isGroupChat {
 		eventType = "is_chat_typing"
 		event = &lp_models.IsChatTypingEvent{
 			UserID: currentUserID,
 			ChatID: peerID - 2000000000,
 			Flags:  flag,
 		}
-
-		dbx.Instance.Model(&db_models.ConversationMember{}).
-			Where("peer_id = ? AND user_id != ?", peerID, currentUserID).
-			Pluck("user_id", &recipients)
 	} else {
 		eventType = "is_dm_typing"
 		event = &lp_models.IsDMTypingEvent{
 			UserID: currentUserID,
 			Flags:  flag,
 		}
-
-		if peerID != currentUserID {
-			recipients = []int64{peerID}
-		}
 	}
 
-	go func(pID, senderID int64, t string, ev lp_models.VKEvent) {
+	go func(pID, senderID int64, chID string, groupChat bool, t string, ev lp_models.VKEvent) {
 		ctx := context.Background()
 		var recipients []int64
 
-		if pID > 2000000000 {
+		if groupChat {
 			dbx.Instance.Model(&db_models.ConversationMember{}).
-				Where("peer_id = ? AND user_id != ?", pID, senderID).
+				Where("internal_chat_id = ? AND user_id != ? AND left_at IS NULL", chID, senderID).
 				Pluck("user_id", &recipients)
 		} else if pID != senderID {
 			recipients = []int64{pID}
@@ -77,7 +73,7 @@ func SetActivity(c *gin.Context, r *core.BaseHandler) {
 			_ = r.LPRepo.PushEphemeralEvent(ctx, uid, t, ev)
 			r.Broadcaster.Notify(uid)
 		}
-	}(peerID, currentUserID, eventType, event)
+	}(peerID, currentUserID, internalChatID, isGroupChat, eventType, event)
 
 	c.JSON(http.StatusOK, gin.H{"response": 1})
 }

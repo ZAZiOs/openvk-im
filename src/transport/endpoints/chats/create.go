@@ -82,7 +82,7 @@ func CreateChat(c *gin.Context, r *core.BaseHandler) {
 
 	baseEvent := lp_models.NewMessageEvent{
 		MessageID:   uint64(msg.ID),
-		PeerID:      conv.PeerID,
+		PeerID:      chat.DerivePeerID(conv.InternalID, currentUserID),
 		Timestamp:   int(msg.CreatedAt.Unix()),
 		Text:        messageText,
 		Attachments: &lpAttach,
@@ -111,6 +111,6 @@ func CreateChat(c *gin.Context, r *core.BaseHandler) {
 	}(allParticipants, baseEvent)
 
 	c.JSON(http.StatusOK, gin.H{
-		"response": conv.PeerID - 2000000000,
+		"response": conv.ID,
 	})
 }

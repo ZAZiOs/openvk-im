@@ -148,31 +148,26 @@ func CreateConversation(ownerID int64, userIDs []int64, groupTitle string) (*db_
 		}
 
 		if isGroupChat {
-			conv.PeerID = int64(2000000000 + conv.ID)
-			conv.InternalID = "c_" + strconv.FormatInt(conv.PeerID, 10)
+			conv.InternalID = "c" + strconv.FormatUint(conv.ID, 10)
 
 			if err := tx.Table("conversations").Where("id = ?", conv.ID).Updates(map[string]interface{}{
-				"peer_id":     conv.PeerID,
 				"internal_id": conv.InternalID,
 			}).Error; err != nil {
 				return err
 			}
 
 			chatID = conv.InternalID
-			targetPeerID = conv.PeerID
 		} else {
-			conv.PeerID = targetPeerID
-			if err := tx.Table("conversations").Where("id = ?", conv.ID).Update("peer_id", targetPeerID).Error; err != nil {
+			if err := tx.Table("conversations").Where("id = ?", conv.ID).Update("internal_id", chatID).Error; err != nil {
 				return err
 			}
 		}
 
 		var members []db_models.ConversationMember
 
-		addMember := func(uID int64, pID int64, isAdmin bool) {
+		addMember := func(uID int64, isAdmin bool) {
 			members = append(members, db_models.ConversationMember{
 				InternalChatID: chatID,
-				PeerID:         pID,
 				UserID:         uID,
 				IsAdmin:        isAdmin,
 				JoinedAt:       time.Now(),
@@ -180,18 +175,13 @@ func CreateConversation(ownerID int64, userIDs []int64, groupTitle string) (*db_
 			})
 		}
 
-		addMember(ownerID, targetPeerID, true)
+		addMember(ownerID, true)
 
 		for _, uID := range userIDs {
 			if uID == ownerID {
 				continue
 			}
-
-			pID := ownerID
-			if isGroupChat {
-				pID = conv.PeerID
-			}
-			addMember(uID, pID, false)
+			addMember(uID, false)
 		}
 
 		return tx.Create(&members).Error
@@ -201,7 +191,7 @@ func CreateConversation(ownerID int64, userIDs []int64, groupTitle string) (*db_
 }
 
 func AddUserToConversation(chatID string, userID int64, inviterID int64) error {
-	if !strings.HasPrefix(chatID, "c_") {
+	if !strings.HasPrefix(chatID, "c") {
 		// Может стоит поменять потом на создание чата с этим человеком?
 		return errors.New("cannot add user to direct message")
 	}
@@ -215,10 +205,8 @@ func AddUserToConversation(chatID string, userID int64, inviterID int64) error {
 		}
 
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			peerID, _ := strconv.ParseInt(chatID[2:], 10, 64)
 			newMember := db_models.ConversationMember{
 				InternalChatID: chatID,
-				PeerID:         peerID,
 				UserID:         userID,
 				IsAdmin:        false,
 				JoinedAt:       time.Now(),
@@ -306,7 +294,7 @@ func CreateServiceMessage(fromID int64, chatID string, text string, action strin
 
 func GetInternalChatID(peerID int64, currentUserID int64) string {
 	if peerID > 2000000000 {
-		return "c_" + strconv.FormatInt(peerID, 10)
+		return "c" + strconv.FormatInt(peerID-2000000000, 10)
 	}
 	if peerID < 0 || currentUserID < 0 {
 		var groupID, userID int64
@@ -328,9 +316,9 @@ func GetInternalChatID(peerID int64, currentUserID int64) string {
 }
 
 func DerivePeerID(chatID string, currentUserID int64) int64 {
-	if strings.HasPrefix(chatID, "c_") {
-		id, _ := strconv.ParseInt(chatID[2:], 10, 64)
-		return id
+	if strings.HasPrefix(chatID, "c") {
+		id, _ := strconv.ParseInt(chatID[1:], 10, 64)
+		return id + 2000000000
 	}
 
 	if strings.HasPrefix(chatID, "g") {

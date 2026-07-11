@@ -45,6 +45,7 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	internalChatID := chat.GetInternalChatID(peerID, currentUserID)
+	isGroupChat := strings.HasPrefix(internalChatID, "c")
 
 	// ------------------------------------
 
@@ -117,7 +118,7 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	switch {
-	case peerID > 2000000000:
+	case isGroupChat:
 		// ПОЛУЧАТЕЛЬ: ЧАТ
 		inChat, err := chat.IsUserInChat(nil, internalChatID, currentUserID)
 		if err != nil || !inChat {
@@ -166,10 +167,9 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 		}
 		finalLocalID = localID
 
-		if peerID < 2000000000 {
+		if !isGroupChat {
 			tx.FirstOrCreate(&db_models.ConversationMember{
 				InternalChatID: internalChatID,
-				PeerID:         peerID,
 				UserID:         currentUserID,
 				JoinedAt:       time.Now(),
 				IsAdmin:        true,
@@ -178,9 +178,9 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 			if peerID != currentUserID {
 				tx.FirstOrCreate(&db_models.ConversationMember{
 					InternalChatID: internalChatID,
-					PeerID:         currentUserID,
 					UserID:         peerID,
 					JoinedAt:       time.Now(),
+					IsAdmin:        true,
 				})
 			}
 		}
@@ -262,9 +262,9 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	var recipients []int64
-	if peerID > 2000000000 {
+	if isGroupChat {
 		dbx.Instance.Model(&db_models.ConversationMember{}).
-			Where("peer_id = ?", peerID).
+			Where("internal_chat_id = ? AND left_at IS NULL", internalChatID).
 			Pluck("user_id", &recipients)
 	} else {
 		recipients = append(recipients, currentUserID)
@@ -273,12 +273,11 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 		}
 	}
 
-	go func(recipients []int64, event lp_models.NewMessageEvent, currentID int64) {
+	go func(rcps []int64, event lp_models.NewMessageEvent, currentID int64) {
 		ctx := context.Background()
 
-		for _, uid := range recipients {
+		for _, uid := range rcps {
 			userEvent := event
-
 			userEvent.Flags = lp_models.MessageFlags{Value: event.Flags.Value}
 
 			if uid == currentID {
