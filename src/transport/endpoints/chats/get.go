@@ -65,6 +65,7 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 
 	lastMsgKeys := make(map[string]uint64)
 	unreadCheckIDs := make([]string, 0)
+	chatIDsToFetchMembers := make([]string, 0)
 
 	for _, row := range rows {
 		if row.LastMessageID > 0 {
@@ -72,6 +73,10 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 		}
 		if row.LastMessageID > row.LastReadID {
 			unreadCheckIDs = append(unreadCheckIDs, row.InternalChatID)
+		}
+		pID := chat.DerivePeerID(row.InternalChatID, currentUserID)
+		if getPeerType(pID) == "chat" {
+			chatIDsToFetchMembers = append(chatIDsToFetchMembers, row.InternalChatID)
 		}
 	}
 
@@ -98,6 +103,23 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 
 		for _, res := range results {
 			unreadCounts[res.ChatID] = res.Cnt
+		}
+	}
+
+	chatMembersMap := make(map[string][]int64)
+	if len(chatIDsToFetchMembers) > 0 {
+		type ChatMember struct {
+			InternalChatID string
+			UserID         int64
+		}
+		var members []ChatMember
+		db.Instance.Table("conversation_members").
+			Select("internal_chat_id, user_id").
+			Where("internal_chat_id IN ? AND left_at IS NULL", chatIDsToFetchMembers).
+			Find(&members)
+
+		for _, m := range members {
+			chatMembersMap[m.InternalChatID] = append(chatMembersMap[m.InternalChatID], m.UserID)
 		}
 	}
 
@@ -157,6 +179,16 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 			conversationObj["current_pinned_message"] = gin.H{"id": conv.PinnedMsgID}
 		}
 
+		if getPeerType(pID) == "chat" {
+			membersList := chatMembersMap[m.InternalChatID]
+			if membersList == nil {
+				membersList = []int64{}
+			}
+			conversationObj["chat_settings"] = gin.H{
+				"members": membersList,
+			}
+		}
+
 		responseItems = append(responseItems, gin.H{
 			"conversation": conversationObj,
 			"last_message": msgVK,
@@ -167,6 +199,14 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 				addID(lastMsg.FromID, &userIDs, &groupIDs, &chatIDs)
 			}
 			addID(pID, &userIDs, &groupIDs, &chatIDs)
+
+			if getPeerType(pID) == "chat" {
+				if membersList, ok := chatMembersMap[m.InternalChatID]; ok {
+					for _, memberID := range membersList {
+						addID(memberID, &userIDs, &groupIDs, &chatIDs)
+					}
+				}
+			}
 		}
 	}
 
@@ -284,9 +324,30 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	lastMsgKeys := make(map[string]uint64)
+	chatIDsToFetchMembers := make([]string, 0)
 	for _, row := range rows {
 		if row.LastMessageID > 0 {
 			lastMsgKeys[row.InternalChatID] = row.LastMessageID
+		}
+		if getPeerType(row.PeerID) == "chat" {
+			chatIDsToFetchMembers = append(chatIDsToFetchMembers, row.InternalChatID)
+		}
+	}
+
+	chatMembersMap := make(map[string][]int64)
+	if len(chatIDsToFetchMembers) > 0 {
+		type ChatMember struct {
+			InternalChatID string
+			UserID         int64
+		}
+		var members []ChatMember
+		db.Instance.Table("conversation_members").
+			Select("internal_chat_id, user_id").
+			Where("internal_chat_id IN ? AND left_at IS NULL", chatIDsToFetchMembers).
+			Find(&members)
+
+		for _, m := range members {
+			chatMembersMap[m.InternalChatID] = append(chatMembersMap[m.InternalChatID], m.UserID)
 		}
 	}
 
@@ -349,6 +410,16 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 			convObj["current_pinned_message"] = gin.H{"id": m.Conversation.PinnedMsgID}
 		}
 
+		if getPeerType(pID) == "chat" {
+			membersList := chatMembersMap[m.InternalChatID]
+			if membersList == nil {
+				membersList = []int64{}
+			}
+			convObj["chat_settings"] = gin.H{
+				"members": membersList,
+			}
+		}
+
 		responseItems = append(responseItems, gin.H{
 			"conversation": convObj,
 			"last_message": msgVK,
@@ -358,6 +429,14 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 			addID(pID, &userIDs, &groupIDs, &chatIDs)
 			if hasMsg {
 				addID(lastMsg.FromID, &userIDs, &groupIDs, &chatIDs)
+			}
+
+			if getPeerType(pID) == "chat" {
+				if membersList, ok := chatMembersMap[m.InternalChatID]; ok {
+					for _, memberID := range membersList {
+						addID(memberID, &userIDs, &groupIDs, &chatIDs)
+					}
+				}
 			}
 		}
 	}
