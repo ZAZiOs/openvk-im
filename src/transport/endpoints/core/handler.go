@@ -53,7 +53,7 @@ func (h *BaseHandler) Reject(c *gin.Context, errorCode int, errorMsg string) {
 	})
 }
 
-var reAttachment = regexp.MustCompile(`^(photo|video|audio|doc|wall|market|poll|question)-?\d+_\d+$`)
+var reAttachment = regexp.MustCompile(`^(photo|video|audio|doc|wall|market|poll|question)-?\d+_\d+(?:_[a-zA-Z0-9]+)?$`)
 
 func IsValidAttachments(attachmentStr string) bool {
 	if attachmentStr == "" {
@@ -63,6 +63,11 @@ func IsValidAttachments(attachmentStr string) bool {
 	parts := strings.Split(attachmentStr, ",")
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
+
+		if part == "" {
+			continue
+		}
+
 		if !reAttachment.MatchString(part) {
 			return false
 		}
