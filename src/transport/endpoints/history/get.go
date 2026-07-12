@@ -27,11 +27,28 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 		peerID = 2000000000 + id
 	}
 
-	chatID := chat.GetInternalChatID(peerID, currentUserID)
-
 	if peerID == 0 {
 		r.Reject(c, 100, "One of the parameters is missing: peer_id, user_id or chat_id")
 		return
+	}
+
+	chatID := chat.GetInternalChatID(peerID, currentUserID)
+	isGroupChat := strings.HasPrefix(chatID, "c")
+
+	var member *db_models.ConversationMember
+	if isGroupChat {
+		var err error
+		member, err = chat.GetMember(db.Instance, chatID, currentUserID)
+		if err != nil || member == nil || member.LeftAt != nil {
+			r.Reject(c, 917, "You don't have access to this chat")
+			return
+		}
+	} else {
+		member, _ = chat.GetMember(db.Instance, chatID, currentUserID)
+		if member == nil {
+			r.Reject(c, 917, "Conversation doesn't exist")
+			return
+		}
 	}
 
 	count, _ := strconv.Atoi(c.DefaultQuery("count", "20"))
@@ -43,18 +60,19 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 	startID, _ := strconv.ParseInt(c.Query("start_message_id"), 10, 64)
 	rev, _ := strconv.Atoi(c.DefaultQuery("rev", "0"))
 
-	isGroupChat := strings.HasPrefix(chatID, "c")
-
-	if isGroupChat {
-		inChat, err := chat.IsUserInChat(nil, chatID, currentUserID)
-		if err != nil || !inChat {
-			r.Reject(c, 917, "You don't have access to this chat")
-			return
-		}
-	}
-
 	var msgs []db_models.Message
 	query := db.Instance.Where("chat_id = ? AND deleted_at IS NULL", chatID)
+
+	if isGroupChat && member != nil && member.StartMessageID > 0 {
+		var startMsg db_models.Message
+		err := db.Instance.Select("local_id").
+			Where("id = ? AND chat_id = ?", member.StartMessageID, chatID).
+			First(&startMsg).Error
+
+		if err == nil {
+			query = query.Where("local_id >= ?", startMsg.LocalID)
+		}
+	}
 
 	if startID > 0 {
 		if offset < 0 {
@@ -90,14 +108,13 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	var totalCount int64
-	db.Instance.Model(&db_models.Message{}).Where("chat_id = ? AND deleted_at IS NULL", chatID).Count(&totalCount)
+	query.Count(&totalCount)
 
 	responseItems := make([]db_models.VKApiMessage, len(msgs))
 	for i, m := range msgs {
 		responseItems[i] = m.ToVKApiStruct(db.Instance, 1, currentUserID, peerID)
 	}
 
-	member, _ := chat.GetMember(db.Instance, chatID, currentUserID)
 	var unreadCount int64
 	if member != nil {
 		db.Instance.Model(&db_models.Message{}).

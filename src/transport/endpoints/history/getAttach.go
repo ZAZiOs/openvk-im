@@ -40,11 +40,20 @@ func GetHistoryAttachments(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	chatID := chat.GetInternalChatID(peerID, currentUserID)
+	isGroupChat := peerID > 2000000000
 
-	if peerID > 2000000000 {
-		inChat, _ := chat.IsUserInChat(nil, chatID, currentUserID)
-		if !inChat {
+	var member *db_models.ConversationMember
+	if isGroupChat {
+		var err error
+		member, err = chat.GetMember(db.Instance, chatID, currentUserID)
+		if err != nil || member == nil || member.LeftAt != nil {
 			r.Reject(c, 917, "You don't have access to this chat")
+			return
+		}
+	} else {
+		member, _ = chat.GetMember(db.Instance, chatID, currentUserID)
+		if member == nil {
+			r.Reject(c, 917, "Conversation doesn't exist")
 			return
 		}
 	}
@@ -59,8 +68,18 @@ func GetHistoryAttachments(c *gin.Context, r *core.BaseHandler) {
 	offset, _ := strconv.Atoi(startFrom)
 
 	var msgs []db_models.Message
-
 	query := db.Instance.Where("chat_id = ? AND attachments != '[]' AND attachments IS NOT NULL AND deleted_at IS NULL", chatID)
+
+	if isGroupChat && member != nil && member.StartMessageID > 0 {
+		var startMsg db_models.Message
+		err := db.Instance.Select("local_id").
+			Where("id = ? AND chat_id = ?", member.StartMessageID, chatID).
+			First(&startMsg).Error
+
+		if err == nil {
+			query = query.Where("local_id >= ?", startMsg.LocalID)
+		}
+	}
 
 	order := "local_id DESC"
 	if c.Query("preserve_order") == "1" {

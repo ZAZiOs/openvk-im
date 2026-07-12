@@ -36,7 +36,7 @@ type ConversationMember struct {
 	UserID         int64  `gorm:"primaryKey;index:idx_user_active_chats,priority:1" json:"user_id"`
 	InternalChatID string `gorm:"primaryKey;index:idx_member_lookup;type:varchar(100)"`
 
-	StartMessageID uint64 `json:"start_message_id"` // UNUSED ATM И ЭТО ПЛОХО!
+	StartMessageID uint64 `json:"start_message_id"`
 	LastReadID     uint64 `json:"last_read_id"`
 
 	IsAdmin bool  `gorm:"type:tinyint(1)" json:"is_admin"`

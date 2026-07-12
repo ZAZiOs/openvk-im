@@ -1,6 +1,7 @@
 package chats
 
 import (
+	"fmt"
 	"net/http"
 	"ovk-im/src/db"
 	db_models "ovk-im/src/models/db"
@@ -63,9 +64,10 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 	totalCount := rows[0].TotalCount
 	totalUnreadConversations := rows[0].TotalUnread
 
-	lastMsgKeys := make(map[string]uint64)
-	unreadCheckIDs := make([]string, 0)
-	chatIDsToFetchMembers := make([]string, 0)
+	numRows := len(rows)
+	lastMsgKeys := make(map[string]uint64, numRows)
+	unreadCheckIDs := make([]string, 0, numRows)
+	chatIDsToFetchMembers := make([]string, 0, numRows)
 
 	for _, row := range rows {
 		if row.LastMessageID > 0 {
@@ -79,7 +81,7 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 		}
 	}
 
-	msgMap := make(map[string]db_models.Message)
+	msgMap := make(map[string]db_models.Message, len(lastMsgKeys))
 	if len(lastMsgKeys) > 0 {
 		var lastMessages []db_models.Message
 		db.Instance.Where("(chat_id, local_id) IN ?", buildInPairs(lastMsgKeys)).Find(&lastMessages)
@@ -88,24 +90,31 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 		}
 	}
 
-	unreadCounts := make(map[string]int64)
+	unreadCounts := make(map[string]int64, len(unreadCheckIDs))
 	if len(unreadCheckIDs) > 0 {
 		type UnreadRes struct {
 			ChatID string
 			Cnt    int64
 		}
 		var results []UnreadRes
-		db.Instance.Model(&db_models.Message{}).
-			Select("chat_id, COUNT(*) as cnt").
-			Where("chat_id IN ? AND from_id != ?", unreadCheckIDs, currentUserID).
-			Group("chat_id").Find(&results)
+
+		db.Instance.Table("messages").
+			Select("messages.chat_id, COUNT(messages.id) as cnt").
+			Joins("JOIN conversation_members ON conversation_members.internal_chat_id = messages.chat_id").
+			Where("conversation_members.user_id = ?", currentUserID).
+			Where("messages.chat_id IN ?", unreadCheckIDs).
+			Where("messages.from_id != ?", currentUserID).
+			Where("messages.local_id > conversation_members.last_read_id").
+			Group("messages.chat_id").Find(&results)
 
 		for _, res := range results {
 			unreadCounts[res.ChatID] = res.Cnt
 		}
 	}
 
-	chatMembersMap := make(map[string][]int64)
+	chatMembersMap := make(map[string][]int64, len(chatIDsToFetchMembers))
+	adminMap := make(map[string]int64, len(chatIDsToFetchMembers))
+
 	if len(chatIDsToFetchMembers) > 0 {
 		type ChatMember struct {
 			InternalChatID string
@@ -120,11 +129,21 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 		for _, m := range members {
 			chatMembersMap[m.InternalChatID] = append(chatMembersMap[m.InternalChatID], m.UserID)
 		}
+
+		var admins []ChatMember
+		db.Instance.Table("conversation_members").
+			Select("internal_chat_id, user_id").
+			Where("internal_chat_id IN ? AND is_admin = ? AND left_at IS NULL", chatIDsToFetchMembers, true).
+			Find(&admins)
+
+		for _, a := range admins {
+			adminMap[a.InternalChatID] = a.UserID
+		}
 	}
 
 	preloadedMap := make(map[uint64]db_models.Message)
-	extraMsgIDs := make([]uint64, 0)
-	convIDs := make([]string, 0)
+	extraMsgIDs := make([]uint64, 0, len(msgMap))
+	convIDs := make([]string, 0, len(msgMap))
 
 	for chatID, msg := range msgMap {
 		convIDs = append(convIDs, chatID)
@@ -156,6 +175,7 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 		conv := m.Conversation
 		pID := chat.DerivePeerID(m.InternalChatID, currentUserID)
 		lastMsg, hasMsg := msgMap[m.InternalChatID]
+
 		var msgVK interface{} = nil
 		if hasMsg {
 			msgVK = lastMsg.ToVKApiStructBatch(1, currentUserID, pID, preloadedMap)
@@ -184,7 +204,8 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 				membersList = []int64{}
 			}
 			conversationObj["chat_settings"] = gin.H{
-				"members": membersList,
+				"members":  membersList,
+				"admin_id": adminMap[m.InternalChatID],
 			}
 		}
 
@@ -218,7 +239,58 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 	if extended {
 		result["profiles"] = uniqueIDs(userIDs)
 		result["groups"] = uniqueIDs(groupIDs)
-		result["chats"] = uniqueIDs(chatIDs)
+
+		uniqueChatIDs := uniqueIDs(chatIDs)
+
+		extendedChats := make([]gin.H, 0, len(uniqueChatIDs))
+		internalIDs := make([]string, 0, len(uniqueChatIDs))
+
+		for _, id := range uniqueChatIDs {
+			if id > 2000000000 {
+				internalIDs = append(internalIDs, fmt.Sprintf("c%d", id-2000000000))
+			}
+		}
+
+		adminMap := make(map[string]int64, len(internalIDs))
+		if len(internalIDs) > 0 {
+			type ChatAdmin struct {
+				InternalChatID string
+				UserID         int64
+			}
+			var admins []ChatAdmin
+			db.Instance.Table("conversation_members").
+				Select("internal_chat_id, user_id").
+				Where("internal_chat_id IN ? AND is_admin = ? AND left_at IS NULL", internalIDs, true).
+				Find(&admins)
+
+			for _, a := range admins {
+				adminMap[a.InternalChatID] = a.UserID
+			}
+		}
+
+		for _, id := range uniqueChatIDs {
+			if id <= 2000000000 {
+				continue
+			}
+
+			localID := id - 2000000000
+			intKey := fmt.Sprintf("c%d", localID)
+
+			extendedChats = append(extendedChats, gin.H{
+				"id":          id,
+				"type":        "chat",
+				"admin_id":    adminMap[intKey],
+				"left":        0,
+				"kicked":      0,
+				"title":       "",
+				"description": "",
+				"photo_50":    "",
+				"photo_100":   "",
+				"photo_200":   "",
+			})
+		}
+
+		result["chats"] = extendedChats
 	}
 
 	c.JSON(http.StatusOK, gin.H{"response": result})
@@ -336,6 +408,7 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	chatMembersMap := make(map[string][]int64)
+	adminMap := make(map[string]int64, len(chatIDsToFetchMembers))
 	if len(chatIDsToFetchMembers) > 0 {
 		type ChatMember struct {
 			InternalChatID string
@@ -349,6 +422,16 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 
 		for _, m := range members {
 			chatMembersMap[m.InternalChatID] = append(chatMembersMap[m.InternalChatID], m.UserID)
+		}
+
+		var admins []ChatMember
+		db.Instance.Table("conversation_members").
+			Select("internal_chat_id, user_id").
+			Where("internal_chat_id IN ? AND is_admin = ? AND left_at IS NULL", chatIDsToFetchMembers, true).
+			Find(&admins)
+
+		for _, a := range admins {
+			adminMap[a.InternalChatID] = a.UserID
 		}
 	}
 
@@ -417,7 +500,8 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 				membersList = []int64{}
 			}
 			convObj["chat_settings"] = gin.H{
-				"members": membersList,
+				"members":  membersList,
+				"admin_id": adminMap[m.InternalChatID],
 			}
 		}
 

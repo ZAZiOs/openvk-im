@@ -29,75 +29,58 @@ func AddChatUser(c *gin.Context, r *core.BaseHandler) {
 	}
 	chatID := chat.GetInternalChatID(peerID, currentUserID)
 
-	isInviterInChat, err := chat.IsUserInChat(nil, chatID, currentUserID)
-	if err != nil || !isInviterInChat {
-		r.Reject(c, 15, "Access denied: you are not a member of this chat")
-		return
-	}
-
-	isTargetInChat, err := chat.IsUserInChat(nil, chatID, userID)
-	if err != nil {
-		r.Reject(c, 10, "Internal server error: failed to check user status")
-		return
-	}
-	if isTargetInChat {
-		r.Reject(c, 15, "User is already a member of this chat")
-		return
-	}
-
-	err = chat.AddUserToConversation(chatID, userID, currentUserID)
-	if err != nil {
-		r.Reject(c, 10, "Internal server error: failed to add user: "+err.Error())
-		return
-	}
-
 	messageText := "invited user " + strconv.FormatInt(userID, 10)
-	msg, err := chat.CreateServiceMessage(
-		currentUserID,
+
+	msg, err := chat.AddUserToConversation(
 		chatID,
+		userID,
+		currentUserID,
 		messageText,
 		"chat_invite_user",
 		userID,
 		"",
 	)
 
+	if err != nil {
+		r.Reject(c, 15, "Failed to add user: "+err.Error())
+		return
+	}
+
+	participants, err := chat.GetActiveMemberIDs(nil, chatID)
 	if err == nil {
-		participants, err := chat.GetActiveMemberIDs(nil, chatID)
-		if err == nil {
-			hasEmoji := false
-			lpAttach := lp_models.LPAttachments{
-				Source: "chat_invite_user",
-				From:   strconv.FormatInt(currentUserID, 10),
-				Emoji:  hasEmoji,
-			}
-
-			baseEvent := lp_models.NewMessageEvent{
-				MessageID:   uint64(msg.ID),
-				PeerID:      peerID,
-				Timestamp:   int(msg.CreatedAt.Unix()),
-				Text:        messageText,
-				Attachments: &lpAttach,
-			}
-
-			go func(parts []int64, event lp_models.NewMessageEvent) {
-				ctx := context.Background()
-				for _, uID := range parts {
-					userEvent := event
-					userEvent.Flags = lp_models.MessageFlags{Value: event.Flags.Value}
-
-					if uID == currentUserID {
-						userEvent.Flags.Add(lp_models.FlagOutbox)
-					} else {
-						userEvent.Flags.Add(lp_models.FlagUnread)
-					}
-
-					_, _, err := r.LPRepo.PushEvent(ctx, uID, "new_msg", userEvent)
-					if err == nil {
-						r.Broadcaster.Notify(uID)
-					}
-				}
-			}(participants, baseEvent)
+		hasEmoji := false
+		lpAttach := lp_models.LPAttachments{
+			Source: "chat_invite_user",
+			From:   strconv.FormatInt(currentUserID, 10),
+			Emoji:  hasEmoji,
 		}
+
+		baseEvent := lp_models.NewMessageEvent{
+			MessageID:   uint64(msg.ID),
+			PeerID:      peerID,
+			Timestamp:   int(msg.CreatedAt.Unix()),
+			Text:        messageText,
+			Attachments: &lpAttach,
+		}
+
+		go func(parts []int64, event lp_models.NewMessageEvent) {
+			ctx := context.Background()
+			for _, uID := range parts {
+				userEvent := event
+				userEvent.Flags = lp_models.MessageFlags{Value: event.Flags.Value}
+
+				if uID == currentUserID {
+					userEvent.Flags.Add(lp_models.FlagOutbox)
+				} else {
+					userEvent.Flags.Add(lp_models.FlagUnread)
+				}
+
+				_, _, err := r.LPRepo.PushEvent(ctx, uID, "new_msg", userEvent)
+				if err == nil {
+					r.Broadcaster.Notify(uID)
+				}
+			}
+		}(participants, baseEvent)
 	}
 
 	c.JSON(http.StatusOK, gin.H{

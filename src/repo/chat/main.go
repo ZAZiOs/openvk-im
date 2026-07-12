@@ -190,17 +190,46 @@ func CreateConversation(ownerID int64, userIDs []int64, groupTitle string) (*db_
 	return &conv, err
 }
 
-func AddUserToConversation(chatID string, userID int64, inviterID int64) error {
+func AddUserToConversation(chatID string, userID int64, inviterID int64, text string, action string, actionMid int64, actionText string) (*db_models.Message, error) {
 	if !strings.HasPrefix(chatID, "c") {
-		// Может стоит поменять потом на создание чата с этим человеком?
-		return errors.New("cannot add user to direct message")
+		return nil, errors.New("cannot add user to direct message")
 	}
 
-	return dbx.Instance.Transaction(func(tx *gorm.DB) error {
+	if actionMid == 0 {
+		actionMid = inviterID
+	}
+
+	var msg *db_models.Message
+
+	err := dbx.Instance.Transaction(func(tx *gorm.DB) error {
 		var member db_models.ConversationMember
 		err := tx.Where("internal_chat_id = ? AND user_id = ?", chatID, userID).First(&member).Error
 
 		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
+			return err
+		}
+
+		if err == nil && member.LeftAt == nil {
+			return errors.New("user is already in the conversation")
+		}
+
+		localID, err := NextLocalID(tx, chatID, inviterID)
+		if err != nil {
+			return err
+		}
+
+		msg = &db_models.Message{
+			FromID:     inviterID,
+			ChatID:     chatID,
+			LocalID:    localID,
+			Text:       db_models.EncryptedJSON(text),
+			Action:     action,
+			ActionMid:  actionMid,
+			ActionText: actionText,
+			CreatedAt:  time.Now(),
+		}
+
+		if err := tx.Create(msg).Error; err != nil {
 			return err
 		}
 
@@ -211,24 +240,37 @@ func AddUserToConversation(chatID string, userID int64, inviterID int64) error {
 				IsAdmin:        false,
 				JoinedAt:       time.Now(),
 				InvitedBy:      inviterID,
+				StartMessageID: uint64(msg.ID),
+				LastMessageID:  localID,
 			}
-			return tx.Create(&newMember).Error
+			if err := tx.Create(&newMember).Error; err != nil {
+				return err
+			}
+		} else {
+			err = tx.Model(&member).Updates(map[string]interface{}{
+				"left_at":          gorm.Expr("NULL"),
+				"invited_by":       inviterID,
+				"joined_at":        time.Now(),
+				"start_message_id": uint64(msg.ID),
+				"last_message_id":  localID,
+			}).Error
+			if err != nil {
+				return err
+			}
 		}
 
-		isActive, err := IsUserInChat(tx, chatID, userID)
-		if err != nil {
-			return err
-		}
-		if isActive {
-			return errors.New("user is already in the conversation")
-		}
+		err = tx.Table("conversation_members").
+			Where("internal_chat_id = ? AND left_at IS NULL AND user_id != ?", chatID, userID).
+			Update("last_message_id", localID).Error
 
-		return tx.Model(&member).Updates(map[string]interface{}{
-			"left_at":    gorm.Expr("NULL"),
-			"invited_by": inviterID,
-			"joined_at":  time.Now(),
-		}).Error
+		return err
 	})
+
+	if err != nil {
+		return nil, err
+	}
+
+	return msg, nil
 }
 
 func RemoveUserFromConversation(tx *gorm.DB, chatID string, userID int64) error {
