@@ -167,6 +167,29 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 		}
 	}
 
+	readCache := make(map[string][]db_models.MemberReadState)
+	if len(lastMsgKeys) > 0 {
+		var targetChatIDs []string
+		for chatID := range lastMsgKeys {
+			targetChatIDs = append(targetChatIDs, chatID)
+		}
+		var memberStates []struct {
+			InternalChatID string `gorm:"column:internal_chat_id"`
+			UserID         int64  `gorm:"column:user_id"`
+			LastReadID     uint64 `gorm:"column:last_read_id"`
+		}
+		db.Instance.Table("conversation_members").
+			Select("internal_chat_id, user_id, last_read_id").
+			Where("internal_chat_id IN ?", targetChatIDs).
+			Scan(&memberStates)
+		for _, ms := range memberStates {
+			readCache[ms.InternalChatID] = append(readCache[ms.InternalChatID], db_models.MemberReadState{
+				UserID:     ms.UserID,
+				LastReadID: ms.LastReadID,
+			})
+		}
+	}
+
 	responseItems := make([]gin.H, 0)
 	var userIDs, groupIDs, chatIDs []int64
 
@@ -178,7 +201,7 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 
 		var msgVK interface{} = nil
 		if hasMsg {
-			msgVK = lastMsg.ToVKApiStructBatch(1, currentUserID, pID, preloadedMap)
+			msgVK = lastMsg.ToVKApiStructBatch(db.Instance, 1, currentUserID, pID, preloadedMap, readCache)
 		}
 
 		conversationObj := gin.H{
@@ -469,6 +492,29 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 		}
 	}
 
+	readCache := make(map[string][]db_models.MemberReadState)
+	if len(lastMsgKeys) > 0 {
+		var targetChatIDs []string
+		for chatID := range lastMsgKeys {
+			targetChatIDs = append(targetChatIDs, chatID)
+		}
+		var memberStates []struct {
+			InternalChatID string `gorm:"column:internal_chat_id"`
+			UserID         int64  `gorm:"column:user_id"`
+			LastReadID     uint64 `gorm:"column:last_read_id"`
+		}
+		db.Instance.Table("conversation_members").
+			Select("internal_chat_id, user_id, last_read_id").
+			Where("internal_chat_id IN ?", targetChatIDs).
+			Scan(&memberStates)
+		for _, ms := range memberStates {
+			readCache[ms.InternalChatID] = append(readCache[ms.InternalChatID], db_models.MemberReadState{
+				UserID:     ms.UserID,
+				LastReadID: ms.LastReadID,
+			})
+		}
+	}
+
 	responseItems := make([]gin.H, 0)
 	var userIDs, groupIDs, chatIDs []int64
 
@@ -478,7 +524,7 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 
 		var msgVK interface{} = nil
 		if hasMsg {
-			msgVK = lastMsg.ToVKApiStructBatch(1, currentUserID, pID, preloadedMap)
+			msgVK = lastMsg.ToVKApiStructBatch(db.Instance, 1, currentUserID, pID, preloadedMap, readCache)
 		}
 
 		convObj := gin.H{

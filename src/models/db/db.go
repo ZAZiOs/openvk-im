@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 
+	"ovk-im/src/db"
+
 	"gorm.io/gorm"
 )
 
@@ -138,6 +140,8 @@ type VKApiMessage struct {
 	PeerID          int64          `json:"peer_id"`
 	FromID          int64          `json:"from_id"`
 	Out             int            `json:"out"`
+	ReadState       int            `json:"read_state"`
+	ReadBy          []int64        `json:"read_by"`
 	Text            string         `json:"text"`
 	RandomID        int64          `json:"random_id,omitempty"`
 	Attachments     string         `json:"attachments"`
@@ -147,33 +151,100 @@ type VKApiMessage struct {
 	Action          interface{}    `json:"action,omitempty"`
 }
 
+type MemberReadState struct {
+	UserID     int64  `gorm:"column:user_id"`
+	LastReadID uint64 `gorm:"column:last_read_id"`
+}
+
+func GetMessageReadInfo(tx *gorm.DB, chatID string, localID uint64, fromID int64, currentUserID int64, readCache map[string][]MemberReadState) (int, []int64) {
+	var members []MemberReadState
+	if readCache != nil {
+		members = readCache[chatID]
+	}
+	if members == nil && chatID != "" {
+		dbRef := tx
+		if dbRef == nil {
+			dbRef = db.Instance
+		}
+		if dbRef != nil {
+			dbRef.Table("conversation_members").
+				Select("user_id, last_read_id").
+				Where("internal_chat_id = ?", chatID).
+				Scan(&members)
+			if readCache != nil {
+				readCache[chatID] = members
+			}
+		}
+	}
+
+	readBy := make([]int64, 0)
+	for _, mbr := range members {
+		if mbr.LastReadID >= localID {
+			readBy = append(readBy, mbr.UserID)
+		}
+	}
+
+	readState := 0
+	if fromID == currentUserID {
+		hasOtherMember := false
+		for _, mbr := range members {
+			if mbr.UserID != currentUserID {
+				hasOtherMember = true
+				if mbr.LastReadID >= localID {
+					readState = 1
+					break
+				}
+			}
+		}
+		if !hasOtherMember {
+			for _, mbr := range members {
+				if mbr.UserID == currentUserID && mbr.LastReadID >= localID {
+					readState = 1
+					break
+				}
+			}
+		}
+	} else {
+		for _, mbr := range members {
+			if mbr.UserID == currentUserID && mbr.LastReadID >= localID {
+				readState = 1
+				break
+			}
+		}
+	}
+
+	return readState, readBy
+}
+
 func (m *Message) ToVKApiStruct(tx *gorm.DB, depth int, currentUserID int64, requestedPeerID int64) VKApiMessage {
 	if depth <= 0 || (m.ReplyTo == nil && m.ForwardMessages == "") {
-		return m.ToVKApiStructBatch(depth, currentUserID, requestedPeerID, nil)
+		return m.ToVKApiStructBatch(tx, depth, currentUserID, requestedPeerID, nil, nil)
 	}
 
 	cache := make(map[uint64]Message)
 
-	if m.ReplyTo != nil && *m.ReplyTo > 0 {
-		var r Message
-		if tx.Where("chat_id = ? AND local_id = ?", m.ChatID, *m.ReplyTo).First(&r).Error == nil {
-			cache[r.LocalID] = r
+	if tx != nil {
+		if m.ReplyTo != nil && *m.ReplyTo > 0 {
+			var r Message
+			if tx.Where("chat_id = ? AND local_id = ?", m.ChatID, *m.ReplyTo).First(&r).Error == nil {
+				cache[r.LocalID] = r
+			}
+		}
+
+		if m.ForwardMessages != "" {
+			ids := strings.Split(m.ForwardMessages, ",")
+			var fwdMsgs []Message
+			tx.Where("chat_id = ? AND local_id IN ?", m.ChatID, ids).Find(&fwdMsgs)
+			for _, f := range fwdMsgs {
+				cache[f.LocalID] = f
+			}
 		}
 	}
 
-	if m.ForwardMessages != "" {
-		ids := strings.Split(m.ForwardMessages, ",")
-		var fwdMsgs []Message
-		tx.Where("chat_id = ? AND local_id IN ?", m.ChatID, ids).Find(&fwdMsgs)
-		for _, f := range fwdMsgs {
-			cache[f.LocalID] = f
-		}
-	}
-
-	return m.ToVKApiStructBatch(depth, currentUserID, requestedPeerID, cache)
+	return m.ToVKApiStructBatch(tx, depth, currentUserID, requestedPeerID, cache, nil)
 }
 
-func (m *Message) ToVKApiStructBatch(depth int, currentUserID int64, requestedPeerID int64, cache map[uint64]Message) VKApiMessage {
+func (m *Message) ToVKApiStructBatch(tx *gorm.DB, depth int, currentUserID int64, requestedPeerID int64, cache map[uint64]Message, readCache map[string][]MemberReadState) VKApiMessage {
 	vkMsg := VKApiMessage{
 		ID:          m.LocalID,
 		GlobalID:    m.ID,
@@ -191,6 +262,8 @@ func (m *Message) ToVKApiStructBatch(depth int, currentUserID int64, requestedPe
 	} else {
 		vkMsg.Out = 0
 	}
+
+	vkMsg.ReadState, vkMsg.ReadBy = GetMessageReadInfo(tx, m.ChatID, m.LocalID, m.FromID, currentUserID, readCache)
 
 	if m.Action != "" {
 		actionObj := map[string]interface{}{
@@ -219,7 +292,7 @@ func (m *Message) ToVKApiStructBatch(depth int, currentUserID int64, requestedPe
 
 	if m.ReplyTo != nil && *m.ReplyTo > 0 && depth > 0 && cache != nil {
 		if replyMsg, ok := cache[*m.ReplyTo]; ok {
-			rm := replyMsg.ToVKApiStructBatch(depth-1, currentUserID, requestedPeerID, cache)
+			rm := replyMsg.ToVKApiStructBatch(tx, depth-1, currentUserID, requestedPeerID, cache, readCache)
 			vkMsg.ReplyMessage = &rm
 		}
 	}
@@ -233,7 +306,7 @@ func (m *Message) ToVKApiStructBatch(depth int, currentUserID int64, requestedPe
 			}
 
 			if fwdMsg, ok := cache[id]; ok {
-				vkMsg.ForwardMessages = append(vkMsg.ForwardMessages, fwdMsg.ToVKApiStructBatch(depth-1, currentUserID, requestedPeerID, cache))
+				vkMsg.ForwardMessages = append(vkMsg.ForwardMessages, fwdMsg.ToVKApiStructBatch(tx, depth-1, currentUserID, requestedPeerID, cache, readCache))
 			}
 		}
 	}

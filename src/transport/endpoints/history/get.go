@@ -110,9 +110,17 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 	var totalCount int64
 	query.Count(&totalCount)
 
+	readCache := make(map[string][]db_models.MemberReadState)
+	var memberStates []db_models.MemberReadState
+	db.Instance.Table("conversation_members").
+		Select("user_id, last_read_id").
+		Where("internal_chat_id = ?", chatID).
+		Scan(&memberStates)
+	readCache[chatID] = memberStates
+
 	responseItems := make([]db_models.VKApiMessage, len(msgs))
 	for i, m := range msgs {
-		responseItems[i] = m.ToVKApiStruct(db.Instance, 1, currentUserID, peerID)
+		responseItems[i] = m.ToVKApiStructBatch(db.Instance, 1, currentUserID, peerID, nil, readCache)
 	}
 
 	var unreadCount int64
