@@ -206,6 +206,13 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 			msgVK = lastMsg.ToVKApiStructBatch(db.Instance, 1, currentUserID, pID, preloadedMap, readCache)
 		}
 
+		var majorID int64 = 0
+		var minorID uint64 = m.LastMessageID
+		if hasMsg {
+			majorID = lastMsg.CreatedAt.Unix()
+			minorID = lastMsg.LocalID
+		}
+
 		conversationObj := gin.H{
 			"peer":            gin.H{"id": pID, "type": getPeerType(m.InternalChatID)},
 			"last_message_id": m.LastMessageID,
@@ -213,10 +220,16 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 			"out_read":        m.LastMessageID,
 			"important":       (m.Flags & 1) != 0,
 			"unanswered":      (m.Flags & 2) != 0,
+			"sort_id": gin.H{
+				"major_id": majorID,
+				"minor_id": minorID,
+			},
 		}
 
 		if uCount, ok := unreadCounts[m.InternalChatID]; ok {
 			conversationObj["unread_count"] = uCount
+		} else {
+			conversationObj["unread_count"] = 0
 		}
 
 		if conv.PinnedMsgID > 0 {
@@ -529,6 +542,13 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 			msgVK = lastMsg.ToVKApiStructBatch(db.Instance, 1, currentUserID, pID, preloadedMap, readCache)
 		}
 
+		var majorID int64 = 0
+		var minorID uint64 = m.LastMessageID
+		if hasMsg {
+			majorID = lastMsg.CreatedAt.Unix()
+			minorID = lastMsg.LocalID
+		}
+
 		convObj := gin.H{
 			"peer":            gin.H{"id": pID, "type": getPeerType(m.InternalChatID)},
 			"last_message_id": m.LastMessageID,
@@ -536,6 +556,10 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 			"out_read":        m.LastMessageID,
 			"important":       (m.Flags & 1) != 0,
 			"unanswered":      (m.Flags & 2) != 0,
+			"sort_id": gin.H{
+				"major_id": majorID,
+				"minor_id": minorID,
+			},
 		}
 
 		if m.Conversation.ID != 0 && m.Conversation.PinnedMsgID > 0 {

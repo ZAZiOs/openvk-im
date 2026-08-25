@@ -8,6 +8,7 @@ import (
 	db_models "ovk-im/src/models/db"
 	lp_models "ovk-im/src/models/longpoll"
 	"ovk-im/src/repo/chat"
+	redis_repo "ovk-im/src/repo/redis"
 	"ovk-im/src/transport/endpoints/core"
 
 	"github.com/gin-gonic/gin"
@@ -41,18 +42,41 @@ func GetLongPollHistory(c *gin.Context, r *core.BaseHandler) {
 	userID := val.(int64)
 
 	ts, _ := strconv.ParseUint(c.Query("ts"), 10, 64)
+	pts, _ := strconv.ParseUint(c.Query("pts"), 10, 64)
 	eventsLimit, _ := strconv.Atoi(c.DefaultQuery("events_limit", "1000"))
 	msgsLimit, _ := strconv.Atoi(c.DefaultQuery("msgs_limit", "200"))
+	if msgsLimit > 1000 {
+		msgsLimit = 1000
+	}
+
+	version, _ := strconv.Atoi(c.DefaultQuery("version", "2"))
+	if v := c.Query("lp_version"); v != "" {
+		if ver, err := strconv.Atoi(v); err == nil {
+			version = ver
+		}
+	}
+	mode, _ := strconv.Atoi(c.DefaultQuery("mode", "2"))
 
 	lpCfg := lp_models.LPConfig{
-		Version:   3,
+		Version:   version,
+		Mode:      mode,
 		Described: 0,
 	}
 
 	ctx := c.Request.Context()
+	if ts == 0 {
+		currentTS, _ := r.LPRepo.GetUserTS(ctx, userID)
+		ts = currentTS
+	}
+
 	// Получаем сырые события из Redis или БД событий
 	rawEvents, newTS, err := r.LPRepo.GetUpdates(ctx, userID, ts)
-	if err != nil {
+	if err != nil && err != redis_repo.ErrTsTooOld {
+		// If error is other than outdated, reject
+		r.Reject(c, 10, "Internal server error: "+err.Error())
+		return
+	}
+	if err == redis_repo.ErrTsTooOld && pts == 0 {
 		r.Reject(c, 907, "History outdated")
 		return
 	}

@@ -55,9 +55,9 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 	replyToStr := c.Query("reply_to")
 	forwardMessagesRaw := c.Query("forward_messages")
 
-	// Message n Attachment
-	if message == "" && attachment == "" {
-		r.Reject(c, 100, "One of the parameters is missing: message or attachment")
+	// Message, Attachment, Reply or Forward
+	if message == "" && attachment == "" && replyToStr == "" && forwardMessagesRaw == "" {
+		r.Reject(c, 100, "One of the parameters is missing: message, attachment, reply_to or forward_messages")
 		return
 	}
 
@@ -250,6 +250,9 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 	lpAttach.From = strconv.FormatInt(currentUserID, 10)
 	if replyTo != 0 {
 		lpAttach.ReplyTo = strconv.FormatUint(replyTo, 10)
+	}
+	if forwardMessagesRaw != "" {
+		lpAttach.Fwd = forwardMessagesRaw
 	}
 	// TODO: Добавить проверку на emoji
 

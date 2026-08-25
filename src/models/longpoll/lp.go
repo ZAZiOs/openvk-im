@@ -59,6 +59,7 @@ type LPAttachments struct {
 	Emoji   bool
 	From    string
 	ReplyTo string
+	Fwd     string
 }
 
 type LPAttachmentItem struct {
@@ -89,6 +90,9 @@ func (a LPAttachments) ToMap() map[string]interface{} {
 	}
 	if a.ReplyTo != "" {
 		res["reply_to"] = a.ReplyTo
+	}
+	if a.Fwd != "" {
+		res["fwd"] = a.Fwd
 	}
 
 	return res
