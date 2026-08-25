@@ -61,29 +61,23 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 	rev, _ := strconv.Atoi(c.DefaultQuery("rev", "0"))
 
 	var msgs []db_models.Message
-	query := db.Instance.Where("chat_id = ? AND deleted_at IS NULL", chatID)
-
-	if isGroupChat && member != nil && member.StartMessageID > 0 {
-		var startMsg db_models.Message
-		err := db.Instance.Select("local_id").
-			Where("id = ? AND chat_id = ?", member.StartMessageID, chatID).
-			First(&startMsg).Error
-
-		if err == nil {
-			query = query.Where("local_id >= ?", startMsg.LocalID)
-		}
-	}
+	query := db.Instance.Where("chat_id = ?", chatID)
+	query = db_models.BuildVisibilityFilter(query, chatID, currentUserID)
 
 	if startID > 0 {
 		if offset < 0 {
 			absOffset := int(-offset)
 
 			if rev == 1 {
-				query = query.Where("local_id >= (SELECT local_id FROM messages WHERE chat_id = ? AND deleted_at IS NULL AND local_id <= ? ORDER BY local_id DESC LIMIT 1 OFFSET ?)",
-					chatID, startID, absOffset-1)
+				subQ := db.Instance.Model(&db_models.Message{}).Where("chat_id = ? AND local_id <= ?", chatID, startID)
+				subQ = db_models.BuildVisibilityFilter(subQ, chatID, currentUserID)
+				query = query.Where("local_id >= (?)",
+					subQ.Select("local_id").Order("local_id DESC").Limit(1).Offset(absOffset-1))
 			} else {
-				query = query.Where("local_id <= (SELECT local_id FROM messages WHERE chat_id = ? AND deleted_at IS NULL AND local_id >= ? ORDER BY local_id ASC LIMIT 1 OFFSET ?)",
-					chatID, startID, absOffset-1)
+				subQ := db.Instance.Model(&db_models.Message{}).Where("chat_id = ? AND local_id >= ?", chatID, startID)
+				subQ = db_models.BuildVisibilityFilter(subQ, chatID, currentUserID)
+				query = query.Where("local_id <= (?)",
+					subQ.Select("local_id").Order("local_id ASC").Limit(1).Offset(absOffset-1))
 			}
 
 			offset = 0
@@ -125,9 +119,10 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 
 	var unreadCount int64
 	if member != nil {
-		db.Instance.Model(&db_models.Message{}).
-			Where("chat_id = ? AND local_id > ? AND from_id != ? AND deleted_at IS NULL", chatID, member.LastReadID, currentUserID).
-			Count(&unreadCount)
+		unreadQuery := db.Instance.Model(&db_models.Message{}).
+			Where("chat_id = ? AND local_id > ? AND from_id != ?", chatID, member.LastReadID, currentUserID)
+		unreadQuery = db_models.BuildVisibilityFilter(unreadQuery, chatID, currentUserID)
+		unreadQuery.Count(&unreadCount)
 	}
 
 	response := gin.H{

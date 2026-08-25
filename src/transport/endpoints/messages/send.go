@@ -174,6 +174,7 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 				JoinedAt:       time.Now(),
 				IsAdmin:        true,
 			})
+			chat.EnsureMemberPeriod(tx, internalChatID, currentUserID, 1)
 
 			if peerID != currentUserID {
 				tx.FirstOrCreate(&db_models.ConversationMember{
@@ -182,6 +183,7 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 					JoinedAt:       time.Now(),
 					IsAdmin:        true,
 				})
+				chat.EnsureMemberPeriod(tx, internalChatID, peerID, 1)
 			}
 		}
 

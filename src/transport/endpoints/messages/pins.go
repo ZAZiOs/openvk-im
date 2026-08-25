@@ -41,7 +41,9 @@ func Pin(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	var msg db_models.Message
-	if err := db.Instance.Where("chat_id = ? AND local_id = ?", chatID, messageID).First(&msg).Error; err != nil {
+	q := db.Instance.Where("chat_id = ? AND local_id = ?", chatID, messageID)
+	q = db_models.BuildVisibilityFilter(q, chatID, currentUserID)
+	if err := q.First(&msg).Error; err != nil {
 		r.Reject(c, 946, "Message not found")
 		return
 	}

@@ -174,6 +174,122 @@ func (r *BaseHandler) BroadcastMarkAsRead(ctx context.Context, chatID string, us
 	}(chatID, userID, lastReadID, currentPeerID)
 }
 
+func (r *BaseHandler) SendDeleteEvent(uid int64, chatID string, localID uint64, flags uint64, forAll bool) {
+	go func() {
+		ctx := context.Background()
+		if forAll {
+			var members []int64
+			r.DB.Model(&db_models.ConversationMember{}).Where("internal_chat_id = ?", chatID).Pluck("user_id", &members)
+
+			for _, memberID := range members {
+				peerID := chat.DerivePeerID(chatID, memberID)
+
+				// 1. msg_set_flags (event 2)
+				setFlagsEvent := lp_models.MsgSetFlagsEvent{
+					MessageID: localID,
+					Mask:      lp_models.MessageFlags{Value: lp_models.FlagDeleted | lp_models.FlagDeleteForAll},
+					PeerID:    peerID,
+				}
+				r.LPRepo.PushEvent(ctx, memberID, "msg_set_flags", setFlagsEvent)
+
+				// 2. msg_delete (event 0)
+				delEvent := lp_models.MsgDeleteEvent{
+					MessageID: localID,
+				}
+				r.LPRepo.PushEvent(ctx, memberID, "msg_delete", delEvent)
+
+				// 3. msg_replace_flags (event 1)
+				replaceFlagsEvent := lp_models.MsgReplaceFlagsEvent{
+					MessageID: localID,
+					Flags:     lp_models.MessageFlags{Value: lp_models.MessageFlag(flags)},
+					PeerID:    peerID,
+				}
+				r.LPRepo.PushEvent(ctx, memberID, "msg_replace_flags", replaceFlagsEvent)
+
+				r.Broadcaster.Notify(memberID)
+			}
+		} else {
+			peerID := chat.DerivePeerID(chatID, uid)
+
+			// 1. msg_set_flags (event 2)
+			setFlagsEvent := lp_models.MsgSetFlagsEvent{
+				MessageID: localID,
+				Mask:      lp_models.MessageFlags{Value: lp_models.FlagDeleted},
+				PeerID:    peerID,
+			}
+			r.LPRepo.PushEvent(ctx, uid, "msg_set_flags", setFlagsEvent)
+
+			// 2. msg_delete (event 0)
+			delEvent := lp_models.MsgDeleteEvent{
+				MessageID: localID,
+			}
+			r.LPRepo.PushEvent(ctx, uid, "msg_delete", delEvent)
+
+			// 3. msg_replace_flags (event 1)
+			replaceFlagsEvent := lp_models.MsgReplaceFlagsEvent{
+				MessageID: localID,
+				Flags:     lp_models.MessageFlags{Value: lp_models.MessageFlag(flags)},
+				PeerID:    peerID,
+			}
+			r.LPRepo.PushEvent(ctx, uid, "msg_replace_flags", replaceFlagsEvent)
+
+			r.Broadcaster.Notify(uid)
+		}
+	}()
+}
+
+func (r *BaseHandler) SendRestoreEvent(uid int64, chatID string, localID uint64, flags uint64, forAll bool) {
+	go func() {
+		ctx := context.Background()
+		if forAll {
+			var members []int64
+			r.DB.Model(&db_models.ConversationMember{}).Where("internal_chat_id = ?", chatID).Pluck("user_id", &members)
+
+			for _, memberID := range members {
+				peerID := chat.DerivePeerID(chatID, memberID)
+
+				// 1. msg_reset_flags (event 3)
+				resetFlagsEvent := lp_models.MsgResetFlagsEvent{
+					MessageID: localID,
+					Mask:      lp_models.MessageFlags{Value: lp_models.FlagDeleted | lp_models.FlagDeleteForAll},
+					PeerID:    peerID,
+				}
+				r.LPRepo.PushEvent(ctx, memberID, "msg_reset_flags", resetFlagsEvent)
+
+				// 2. msg_replace_flags (event 1)
+				replaceFlagsEvent := lp_models.MsgReplaceFlagsEvent{
+					MessageID: localID,
+					Flags:     lp_models.MessageFlags{Value: lp_models.MessageFlag(flags)},
+					PeerID:    peerID,
+				}
+				r.LPRepo.PushEvent(ctx, memberID, "msg_replace_flags", replaceFlagsEvent)
+
+				r.Broadcaster.Notify(memberID)
+			}
+		} else {
+			peerID := chat.DerivePeerID(chatID, uid)
+
+			// 1. msg_reset_flags (event 3)
+			resetFlagsEvent := lp_models.MsgResetFlagsEvent{
+				MessageID: localID,
+				Mask:      lp_models.MessageFlags{Value: lp_models.FlagDeleted},
+				PeerID:    peerID,
+			}
+			r.LPRepo.PushEvent(ctx, uid, "msg_reset_flags", resetFlagsEvent)
+
+			// 2. msg_replace_flags (event 1)
+			replaceFlagsEvent := lp_models.MsgReplaceFlagsEvent{
+				MessageID: localID,
+				Flags:     lp_models.MessageFlags{Value: lp_models.MessageFlag(flags)},
+				PeerID:    peerID,
+			}
+			r.LPRepo.PushEvent(ctx, uid, "msg_replace_flags", replaceFlagsEvent)
+
+			r.Broadcaster.Notify(uid)
+		}
+	}()
+}
+
 func (r *BaseHandler) SendFlagsUpdate(uid int64, chatID string, localID uint64, flags uint64, forAll bool) {
 	go func() {
 		if forAll {
@@ -320,18 +436,19 @@ func (r *BaseHandler) UpdateChatFlags(userID int64, peerID int64, mask uint64, m
 func (r *BaseHandler) BackgroundDeleteChat(userID int64, peerID int64, internalChatID string) {
 	tx := r.DB.Begin()
 
-	err := tx.Where("chat_id = ?", internalChatID).Delete(&db_models.Message{}).Error
-	if err != nil {
-		tx.Rollback()
-		return
-	}
+	var maxLocalID uint64
+	tx.Table("messages").
+		Where("chat_id = ?", internalChatID).
+		Select("COALESCE(MAX(local_id), 0)").
+		Row().
+		Scan(&maxLocalID)
 
 	updates := map[string]interface{}{
-		"last_message_id": 0,
-		"last_read_id":    0,
+		"deleted_before_id": maxLocalID,
+		"last_read_id":      maxLocalID,
 	}
 
-	err = tx.Model(&db_models.ConversationMember{}).
+	err := tx.Model(&db_models.ConversationMember{}).
 		Where("user_id = ? AND internal_chat_id = ?", userID, internalChatID).
 		Updates(updates).Error
 

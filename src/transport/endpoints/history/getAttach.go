@@ -68,18 +68,8 @@ func GetHistoryAttachments(c *gin.Context, r *core.BaseHandler) {
 	offset, _ := strconv.Atoi(startFrom)
 
 	var msgs []db_models.Message
-	query := db.Instance.Where("chat_id = ? AND attachments != '[]' AND attachments IS NOT NULL AND deleted_at IS NULL", chatID)
-
-	if isGroupChat && member != nil && member.StartMessageID > 0 {
-		var startMsg db_models.Message
-		err := db.Instance.Select("local_id").
-			Where("id = ? AND chat_id = ?", member.StartMessageID, chatID).
-			First(&startMsg).Error
-
-		if err == nil {
-			query = query.Where("local_id >= ?", startMsg.LocalID)
-		}
-	}
+	query := db.Instance.Where("chat_id = ? AND attachments != '[]' AND attachments IS NOT NULL", chatID)
+	query = db_models.BuildVisibilityFilter(query, chatID, currentUserID)
 
 	order := "local_id DESC"
 	if c.Query("preserve_order") == "1" {

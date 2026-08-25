@@ -83,7 +83,9 @@ func GetLongPollHistory(c *gin.Context, r *core.BaseHandler) {
 			chatID := chat.GetInternalChatID(peerID, userID)
 
 			var m db_models.Message
-			err := db.Instance.Where("chat_id = ? AND local_id = ?", chatID, localID).First(&m).Error
+			q := db.Instance.Where("chat_id = ? AND local_id = ?", chatID, localID)
+			q = db_models.BuildVisibilityFilter(q, chatID, userID)
+			err := q.First(&m).Error
 			if err == nil {
 				msgItems = append(msgItems, m.ToVKApiStruct(db.Instance, 0, userID, peerID))
 			}

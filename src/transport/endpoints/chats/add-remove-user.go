@@ -150,6 +150,8 @@ func RemoveChatUser(c *gin.Context, r *core.BaseHandler) {
 	)
 
 	if err == nil {
+		chat.CloseActiveMemberPeriod(nil, chatID, userID, msg.LocalID)
+
 		participants, err := chat.GetActiveMemberIDs(nil, chatID)
 		if err == nil {
 			notifyList := append(participants, userID)

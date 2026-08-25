@@ -12,6 +12,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 func Delete(c *gin.Context, r *core.BaseHandler) {
@@ -23,8 +24,7 @@ func Delete(c *gin.Context, r *core.BaseHandler) {
 
 	peerID, _ := strconv.ParseInt(c.Query("peer_id"), 10, 64)
 	idsStr := c.Query("message_ids")
-	// пока-что по умолчанию удаление происходит для всех. надо пересмотреть это потом.
-	//deleteAll := c.Query("delete_for_all") == "1"
+	deleteAll := c.Query("delete_for_all") == "1"
 
 	if peerID == 0 || idsStr == "" {
 		r.Reject(c, 100, "One of the parameters is missing: peer_id or message_ids")
@@ -45,32 +45,58 @@ func Delete(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	chatID := chat.GetInternalChatID(peerID, currentUserID)
+
+	var msgs []db_models.Message
+	if err := dbx.Instance.Where("chat_id = ? AND local_id IN ?", chatID, localIDs).Find(&msgs).Error; err != nil || len(msgs) == 0 {
+		r.Reject(c, 946, "Messages not found")
+		return
+	}
+
+	if deleteAll {
+		for _, msg := range msgs {
+			if msg.FromID != currentUserID {
+				r.Reject(c, 924, "Can't delete this message for all users: you are not the author")
+				return
+			}
+			if time.Since(msg.CreatedAt).Hours() > 24 {
+				r.Reject(c, 924, "Can't delete this message for all users: 24 hours have passed")
+				return
+			}
+		}
+	}
+
 	results := make(map[string]int)
 
 	err := dbx.Instance.Transaction(func(tx *gorm.DB) error {
-		var msgs []db_models.Message
-
-		if err := tx.Where("chat_id = ? AND local_id IN ?", chatID, localIDs).Find(&msgs).Error; err != nil {
-			return err
-		}
-
 		now := time.Now()
 		for _, msg := range msgs {
-			newFlags := msg.Flags | 128
+			if deleteAll {
+				newFlags := msg.Flags | 128 | 64
+				updates := map[string]interface{}{
+					"flags":      newFlags,
+					"deleted_at": &now,
+				}
 
-			updates := map[string]interface{}{
-				"flags":      newFlags,
-				"deleted_at": &now,
+				if err := tx.Model(&msg).Updates(updates).Error; err != nil {
+					continue
+				}
+
+				results[strconv.FormatUint(msg.LocalID, 10)] = 1
+				r.SendDeleteEvent(currentUserID, chatID, msg.LocalID, newFlags, true)
+			} else {
+				// Delete for current user only
+				delRecord := db_models.DeletedMessage{
+					UserID:  currentUserID,
+					ChatID:  chatID,
+					LocalID: msg.LocalID,
+				}
+				if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&delRecord).Error; err != nil {
+					continue
+				}
+
+				results[strconv.FormatUint(msg.LocalID, 10)] = 1
+				r.SendDeleteEvent(currentUserID, chatID, msg.LocalID, msg.Flags|128, false)
 			}
-
-			if err := tx.Model(&msg).Updates(updates).Error; err != nil {
-				continue
-			}
-
-			results[strconv.FormatUint(msg.LocalID, 10)] = 1
-
-			//canDeleteForAll := deleteAll && msg.FromID == currentUserID && time.Since(msg.CreatedAt).Hours() <= 24
-			r.SendFlagsUpdate(currentUserID, chatID, msg.LocalID, newFlags, true)
 		}
 
 		if len(msgs) > 0 {
@@ -111,21 +137,36 @@ func Restore(c *gin.Context, r *core.BaseHandler) {
 			return err
 		}
 
-		newFlags := msg.Flags &^ 128
-
-		updates := map[string]interface{}{
-			"flags":      newFlags,
-			"deleted_at": nil,
+		// First check if deleted only for current user
+		var delRecord db_models.DeletedMessage
+		res := tx.Where("user_id = ? AND chat_id = ? AND local_id = ?", currentUserID, chatID, messageID).Delete(&delRecord)
+		if res.RowsAffected > 0 {
+			r.SendRestoreEvent(currentUserID, chatID, msg.LocalID, msg.Flags, false)
+			return nil
 		}
 
-		if err := tx.Model(&msg).Updates(updates).Error; err != nil {
-			return err
+		// Otherwise if globally deleted and current user is sender
+		if msg.DeletedAt != nil {
+			if msg.FromID != currentUserID {
+				return gorm.ErrRecordNotFound
+			}
+
+			newFlags := msg.Flags &^ (128 | 64)
+			updates := map[string]interface{}{
+				"flags":      newFlags,
+				"deleted_at": nil,
+			}
+
+			if err := tx.Model(&msg).Updates(updates).Error; err != nil {
+				return err
+			}
+
+			chat.RefreshChatLastMessage(tx, chatID)
+			r.SendRestoreEvent(currentUserID, chatID, msg.LocalID, newFlags, true)
+			return nil
 		}
 
-		chat.RefreshChatLastMessage(tx, chatID)
-
-		r.SendFlagsUpdate(currentUserID, chatID, msg.LocalID, newFlags, true)
-		return nil
+		return gorm.ErrRecordNotFound
 	})
 
 	if err != nil {

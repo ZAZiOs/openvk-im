@@ -38,8 +38,9 @@ type ConversationMember struct {
 	UserID         int64  `gorm:"primaryKey;index:idx_user_active_chats,priority:1" json:"user_id"`
 	InternalChatID string `gorm:"primaryKey;index:idx_member_lookup;type:varchar(100)"`
 
-	StartMessageID uint64 `json:"start_message_id"`
-	LastReadID     uint64 `json:"last_read_id"`
+	StartMessageID  uint64 `json:"start_message_id"`
+	LastReadID      uint64 `json:"last_read_id"`
+	DeletedBeforeID uint64 `json:"deleted_before_id"`
 
 	IsAdmin bool  `gorm:"type:tinyint(1)" json:"is_admin"`
 	IsMuted bool  `gorm:"type:tinyint(1)" json:"is_muted"`
@@ -127,6 +128,58 @@ type ImportantMessage struct {
 type ImState struct {
 	UserID int64  `gorm:"primaryKey;autoIncrement:false"`
 	PTS    uint64 `gorm:"default:1"`
+}
+
+type ConversationMemberPeriod struct {
+	ID             uint64  `gorm:"primaryKey;autoIncrement"`
+	InternalChatID string  `gorm:"index:idx_period_lookup;type:varchar(100)"`
+	UserID         int64   `gorm:"index:idx_period_lookup"`
+	StartLocalID   uint64  `json:"start_local_id"`
+	EndLocalID     *uint64 `json:"end_local_id"` // NULL = still active
+}
+
+type DeletedMessage struct {
+	UserID  int64  `gorm:"primaryKey"`
+	ChatID  string `gorm:"primaryKey;type:varchar(100)"`
+	LocalID uint64 `gorm:"primaryKey"`
+}
+
+// BuildVisibilityFilter applies visibility filters to a gorm query for messages.
+// It filters out:
+// 1. Messages globally deleted (deleted_at IS NOT NULL)
+// 2. Messages outside the user's presence periods (conversation_member_periods)
+// 3. Messages individually deleted by the user (deleted_messages)
+// 4. Messages before the user's DeletedBeforeID (from deleteConversation)
+func BuildVisibilityFilter(query *gorm.DB, chatID string, userID int64) *gorm.DB {
+	query = query.Where("messages.deleted_at IS NULL")
+
+	if chatID != "" {
+		if strings.HasPrefix(chatID, "c") {
+			query = query.Where(
+				"(NOT EXISTS (SELECT 1 FROM conversation_member_periods p0 WHERE p0.internal_chat_id = ?) OR EXISTS (SELECT 1 FROM conversation_member_periods p WHERE p.internal_chat_id = messages.chat_id AND p.user_id = ? AND messages.local_id >= p.start_local_id AND (p.end_local_id IS NULL OR messages.local_id <= p.end_local_id)))",
+				chatID, userID,
+			)
+		}
+	} else {
+		query = query.Where(
+			"(messages.chat_id NOT LIKE 'c%' OR NOT EXISTS (SELECT 1 FROM conversation_member_periods p0 WHERE p0.internal_chat_id = messages.chat_id) OR EXISTS (SELECT 1 FROM conversation_member_periods p WHERE p.internal_chat_id = messages.chat_id AND p.user_id = ? AND messages.local_id >= p.start_local_id AND (p.end_local_id IS NULL OR messages.local_id <= p.end_local_id)))",
+			userID,
+		)
+	}
+
+	// Filter out individually deleted messages
+	query = query.Where(
+		"NOT EXISTS (SELECT 1 FROM deleted_messages dm WHERE dm.chat_id = messages.chat_id AND dm.user_id = ? AND dm.local_id = messages.local_id)",
+		userID,
+	)
+
+	// Filter out messages before DeletedBeforeID
+	query = query.Where(
+		"messages.local_id > COALESCE((SELECT deleted_before_id FROM conversation_members WHERE internal_chat_id = messages.chat_id AND user_id = ?), 0)",
+		userID,
+	)
+
+	return query
 }
 
 // ----- METHODS -----

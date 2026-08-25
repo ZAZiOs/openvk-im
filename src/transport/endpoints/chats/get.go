@@ -105,6 +105,8 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 			Where("messages.chat_id IN ?", unreadCheckIDs).
 			Where("messages.from_id != ?", currentUserID).
 			Where("messages.local_id > conversation_members.last_read_id").
+			Where("messages.local_id > conversation_members.deleted_before_id").
+			Where("messages.deleted_at IS NULL").
 			Group("messages.chat_id").Find(&results)
 
 		for _, res := range results {

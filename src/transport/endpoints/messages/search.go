@@ -89,8 +89,14 @@ func Search(c *gin.Context, r *core.BaseHandler) {
 		return
 	}
 
+	targetChatID := ""
+	if peerID != 0 {
+		targetChatID = chat.GetInternalChatID(peerID, currentUserID)
+	}
+
 	var msgs []db_models.Message
 	query := db.Instance.Where("id IN ?", messageIDs)
+	query = db_models.BuildVisibilityFilter(query, targetChatID, currentUserID)
 
 	if dateParam := c.Query("date"); dateParam != "" {
 		if t, err := time.Parse("02012006", dateParam); err == nil {

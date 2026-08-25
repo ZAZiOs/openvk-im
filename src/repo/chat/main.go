@@ -164,6 +164,7 @@ func CreateConversation(ownerID int64, userIDs []int64, groupTitle string) (*db_
 		}
 
 		var members []db_models.ConversationMember
+		var periods []db_models.ConversationMemberPeriod
 
 		addMember := func(uID int64, isAdmin bool) {
 			members = append(members, db_models.ConversationMember{
@@ -172,6 +173,12 @@ func CreateConversation(ownerID int64, userIDs []int64, groupTitle string) (*db_
 				IsAdmin:        isAdmin,
 				JoinedAt:       time.Now(),
 				InvitedBy:      ownerID,
+			})
+			periods = append(periods, db_models.ConversationMemberPeriod{
+				InternalChatID: chatID,
+				UserID:         uID,
+				StartLocalID:   1,
+				EndLocalID:     nil,
 			})
 		}
 
@@ -182,6 +189,10 @@ func CreateConversation(ownerID int64, userIDs []int64, groupTitle string) (*db_
 				continue
 			}
 			addMember(uID, false)
+		}
+
+		if err := tx.Create(&periods).Error; err != nil {
+			return err
 		}
 
 		return tx.Create(&members).Error
@@ -233,6 +244,17 @@ func AddUserToConversation(chatID string, userID int64, inviterID int64, text st
 			return err
 		}
 
+		// Create a new active period starting from this service message
+		newPeriod := db_models.ConversationMemberPeriod{
+			InternalChatID: chatID,
+			UserID:         userID,
+			StartLocalID:   localID,
+			EndLocalID:     nil,
+		}
+		if err := tx.Create(&newPeriod).Error; err != nil {
+			return err
+		}
+
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			newMember := db_models.ConversationMember{
 				InternalChatID: chatID,
@@ -277,6 +299,31 @@ func RemoveUserFromConversation(tx *gorm.DB, chatID string, userID int64) error 
 	return getDB(tx).Model(&db_models.ConversationMember{}).
 		Where("internal_chat_id = ? AND user_id = ?", chatID, userID).
 		Update("left_at", time.Now()).Error
+}
+
+func CloseActiveMemberPeriod(tx *gorm.DB, chatID string, userID int64, endLocalID uint64) error {
+	return getDB(tx).Model(&db_models.ConversationMemberPeriod{}).
+		Where("internal_chat_id = ? AND user_id = ? AND end_local_id IS NULL", chatID, userID).
+		Update("end_local_id", endLocalID).Error
+}
+
+func EnsureMemberPeriod(tx *gorm.DB, chatID string, userID int64, startLocalID uint64) error {
+	var count int64
+	err := getDB(tx).Model(&db_models.ConversationMemberPeriod{}).
+		Where("internal_chat_id = ? AND user_id = ?", chatID, userID).
+		Count(&count).Error
+	if err != nil {
+		return err
+	}
+	if count == 0 {
+		return getDB(tx).Create(&db_models.ConversationMemberPeriod{
+			InternalChatID: chatID,
+			UserID:         userID,
+			StartLocalID:   startLocalID,
+			EndLocalID:     nil,
+		}).Error
+	}
+	return nil
 }
 
 /*
