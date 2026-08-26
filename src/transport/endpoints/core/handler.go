@@ -149,12 +149,21 @@ func (r *BaseHandler) BroadcastMarkAsRead(ctx context.Context, chatID string, us
 		defer cancel()
 
 		var members []int64
-		err := db.Instance.Model(&db_models.ConversationMember{}).
-			Where("internal_chat_id = ? AND user_id != ? AND left_at IS NULL", cID, uID).
-			Pluck("user_id", &members).Error
-
-		if err != nil {
-			return
+		if strings.HasPrefix(cID, "c") {
+			_ = db.Instance.Model(&db_models.ConversationMember{}).
+				Where("internal_chat_id = ? AND user_id != ? AND left_at IS NULL", cID, uID).
+				Pluck("user_id", &members).Error
+		} else if strings.HasPrefix(cID, "dm") {
+			parts := strings.Split(cID[2:], "_")
+			if len(parts) == 2 {
+				id1, _ := strconv.ParseInt(parts[0], 10, 64)
+				id2, _ := strconv.ParseInt(parts[1], 10, 64)
+				if id1 == uID {
+					members = []int64{id2}
+				} else {
+					members = []int64{id1}
+				}
+			}
 		}
 
 		var targetPeerID int64

@@ -35,7 +35,12 @@ func MarkAsRead(c *gin.Context, r *core.BaseHandler) {
 
 	if peerID != 0 && startID != 0 {
 		chatID := chat.GetInternalChatID(peerID, currentUserID)
-		tasks[chatID] = &markTask{maxLocalID: startID, pID: peerID}
+		var msg db_models.Message
+		if err := db.Instance.Select("local_id").Where("chat_id = ? AND (local_id = ? OR id = ?)", chatID, startID, startID).Order("local_id DESC").First(&msg).Error; err == nil && msg.LocalID > 0 {
+			tasks[chatID] = &markTask{maxLocalID: msg.LocalID, pID: peerID}
+		} else {
+			tasks[chatID] = &markTask{maxLocalID: startID, pID: peerID}
+		}
 	}
 
 	if idsStr != "" {
@@ -59,9 +64,10 @@ func MarkAsRead(c *gin.Context, r *core.BaseHandler) {
 
 	if peerID != 0 && startID == 0 && idsStr == "" {
 		chatID := chat.GetInternalChatID(peerID, currentUserID)
-		conv, _ := chat.GetConversation(db.Instance, chatID)
-		if conv != nil {
-			tasks[chatID] = &markTask{maxLocalID: conv.LastMessageID, pID: peerID}
+		var maxLocalID uint64
+		db.Instance.Table("messages").Where("chat_id = ?", chatID).Select("COALESCE(MAX(local_id), 0)").Row().Scan(&maxLocalID)
+		if maxLocalID > 0 {
+			tasks[chatID] = &markTask{maxLocalID: maxLocalID, pID: peerID}
 		}
 	}
 
@@ -70,12 +76,12 @@ func MarkAsRead(c *gin.Context, r *core.BaseHandler) {
 			ctx := context.Background()
 
 			for cID, task := range tks {
-				if err := chat.MarkAsRead(db.Instance, cID, uid, task.maxLocalID); err == nil {
-					r.BroadcastMarkAsRead(ctx, cID, uid, task.maxLocalID)
-				}
+				_ = chat.MarkAsRead(db.Instance, cID, uid, task.maxLocalID)
+				r.BroadcastMarkAsRead(ctx, cID, uid, task.maxLocalID)
 			}
 		}(tasks, currentUserID)
 	}
+
 
 	c.JSON(http.StatusOK, gin.H{"response": 1})
 }
