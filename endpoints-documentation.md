@@ -73,3 +73,17 @@ if (isset($data['code']) && $data['code'] === 5) {
     "count": uint
     }
 ```
+
+### im.checkPeerExist
+Проверяет наличие переписки / диалога с указанным `peer_id` (или `user_id`, `chat_id`).
+
+Параметры:
+* `peer_id` (int64) — ID диалога/беседы (ID пользователя, ID беседы `2000000000 + id` или ID сообщества `-id`).
+
+Возвращает:
+```json
+"response": { 
+    "exists": bool
+    }
+```
+
