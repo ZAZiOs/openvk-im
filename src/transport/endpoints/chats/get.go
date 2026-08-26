@@ -43,9 +43,19 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 		Joins("LEFT JOIN messages ON messages.chat_id = conversation_members.internal_chat_id AND messages.local_id = conversation_members.last_message_id").
 		Where("conversation_members.user_id = ? AND conversation_members.left_at IS NULL", currentUserID)
 
-	if filter == "unread" {
+	if currentUserID == 0 {
+		query = db.Instance.Table("conversations").
+			Select(`
+				conversations.internal_id as internal_chat_id,
+				conversations.last_message_id as last_message_id,
+				COUNT(*) OVER() as total_count,
+				0 as total_unread
+			`).
+			Joins("LEFT JOIN messages ON messages.chat_id = conversations.internal_id AND messages.local_id = conversations.last_message_id")
+	} else if filter == "unread" {
 		query = query.Where("conversation_members.last_message_id > conversation_members.last_read_id")
 	}
+
 
 	err := query.Order("messages.created_at DESC, messages.id DESC").
 		Preload("Conversation").
@@ -345,27 +355,34 @@ func GetConversationMembers(c *gin.Context, r *core.BaseHandler) {
 	currentUserID := val.(int64)
 
 	peerID, _ := strconv.ParseInt(c.Query("peer_id"), 10, 64)
-	if peerID == 0 {
+	uIDParam, _ := strconv.ParseInt(c.Query("user_id"), 10, 64)
+	internalChatId := chat.ResolveChatID(c.Query("chat_id"), peerID, uIDParam, currentUserID)
+
+	if internalChatId == "" && peerID == 0 {
 		r.Reject(c, 100, "One of the parameters is missing: peer_id")
 		return
 	}
-	internalChatId := chat.GetInternalChatID(peerID, currentUserID)
+	if internalChatId == "" {
+		internalChatId = chat.GetInternalChatID(peerID, currentUserID)
+	}
 
 	extended := c.Query("extended") == "1"
 
-	var check db_models.ConversationMember
-	err := db.Instance.Where("internal_chat_id = ? AND user_id = ? AND left_at IS NULL", internalChatId, currentUserID).First(&check).Error
+	if currentUserID != 0 {
+		var check db_models.ConversationMember
+		err := db.Instance.Where("internal_chat_id = ? AND user_id = ? AND left_at IS NULL", internalChatId, currentUserID).First(&check).Error
 
-	if err != nil {
-		r.Reject(c, 917, "You don't have access to this chat")
-		return
+		if err != nil {
+			r.Reject(c, 917, "You don't have access to this chat")
+			return
+		}
 	}
 
 	var members []db_models.ConversationMember
 	var userIDs, groupIDs, chatIDs []int64
 	items := make([]gin.H, 0)
 
-	if peerID > 2000000000 {
+	if peerID > 2000000000 || strings.HasPrefix(internalChatId, "c") {
 		db.Instance.Where("internal_chat_id = ? AND left_at IS NULL", internalChatId).Find(&members)
 
 		for _, m := range members {
@@ -424,16 +441,33 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 	parts := strings.Split(peerIDsStr, ",")
 	var targetChatIDs []string
 	for _, p := range parts {
-		if id, err := strconv.ParseInt(strings.TrimSpace(p), 10, 64); err == nil {
+		pTrim := strings.TrimSpace(p)
+		if strings.HasPrefix(pTrim, "dm") || strings.HasPrefix(pTrim, "c") || strings.HasPrefix(pTrim, "g") {
+			targetChatIDs = append(targetChatIDs, pTrim)
+		} else if id, err := strconv.ParseInt(pTrim, 10, 64); err == nil {
 			internalID := chat.GetInternalChatID(id, currentUserID)
 			targetChatIDs = append(targetChatIDs, internalID)
 		}
 	}
 
 	var rows []db_models.ConversationMember
-	err := db.Instance.Where("user_id = ? AND internal_chat_id IN ? AND left_at IS NULL", currentUserID, targetChatIDs).
-		Preload("Conversation").
-		Find(&rows).Error
+	var err error
+	if currentUserID == 0 {
+		var convs []db_models.Conversation
+		err = db.Instance.Where("internal_id IN ?", targetChatIDs).Find(&convs).Error
+		for _, conv := range convs {
+			rows = append(rows, db_models.ConversationMember{
+				InternalChatID: conv.InternalID,
+				LastMessageID:  conv.LastMessageID,
+				Conversation:   conv,
+			})
+		}
+	} else {
+		err = db.Instance.Where("user_id = ? AND internal_chat_id IN ? AND left_at IS NULL", currentUserID, targetChatIDs).
+			Preload("Conversation").
+			Find(&rows).Error
+	}
+
 
 	if err != nil {
 		r.Reject(c, 10, "Internal server error")

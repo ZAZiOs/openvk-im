@@ -62,9 +62,18 @@ func Search(c *gin.Context, r *core.BaseHandler) {
 	var messageIDs []uint64
 	var err error
 
-	if peerID != 0 {
-		chatID := chat.GetInternalChatID(peerID, currentUserID)
-		messageIDs, err = r.SearchRepo.SearchMessages(chatID, q)
+	uIDParam, _ := strconv.ParseInt(c.Query("user_id"), 10, 64)
+	targetChatID := chat.ResolveChatID(c.Query("chat_id"), peerID, uIDParam, currentUserID)
+
+	if targetChatID != "" {
+		messageIDs, err = r.SearchRepo.SearchMessages(targetChatID, q)
+	} else if currentUserID == 0 {
+		err = db.Instance.Model(&db_models.MessageSearchIndex{}).
+			Select("message_id").
+			Where("word_hash IN ?", r.SearchRepo.PrepareHashes(q)).
+			Group("message_id").
+			Having("COUNT(DISTINCT word_hash) = ?", r.SearchRepo.WordsCount(q)).
+			Pluck("message_id", &messageIDs).Error
 	} else {
 		var myChatIDs []string
 		db.Instance.Model(&db_models.ConversationMember{}).
@@ -89,10 +98,6 @@ func Search(c *gin.Context, r *core.BaseHandler) {
 		return
 	}
 
-	targetChatID := ""
-	if peerID != 0 {
-		targetChatID = chat.GetInternalChatID(peerID, currentUserID)
-	}
 
 	var msgs []db_models.Message
 	query := db.Instance.Where("id IN ?", messageIDs)

@@ -5,6 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"ovk-im/src/config"
 	"ovk-im/src/transport/endpoints/chats"
 	"ovk-im/src/transport/endpoints/core"
 	"ovk-im/src/transport/endpoints/custom"
@@ -31,6 +32,13 @@ func (r *Router) AuthMiddleware() gin.HandlerFunc {
 			return
 		}
 
+		modToken := env.Get("MODERATOR_TOKEN", "")
+		if modToken != "" && key == modToken {
+			c.Set("userID", int64(0))
+			c.Next()
+			return
+		}
+
 		userID, err := r.LPRepo.GetUserIDBySession(c.Request.Context(), key)
 		if err != nil {
 			r.Reject(c, 5, "User authorization failed: invalid session")
@@ -50,12 +58,44 @@ func (r *Router) Register(group *gin.RouterGroup) {
 	protected.Match([]string{"GET", "POST"}, "/:slug", r.BasicHandler)
 }
 
+var writeMethods = map[string]bool{
+	"messages.send":                       true,
+	"messages.edit":                       true,
+	"messages.pin":                        true,
+	"messages.unpin":                      true,
+	"messages.markAsImportant":            true,
+	"messages.markAsRead":                 true,
+	"messages.delete":                     true,
+	"messages.restore":                    true,
+	"messages.createChat":                  true,
+	"messages.editChat":                    true,
+	"messages.setChatPhoto":                true,
+	"messages.deleteChatPhoto":             true,
+	"messages.addChatUser":                 true,
+	"messages.removeChatUser":              true,
+	"messages.markAsAnsweredConversation":  true,
+	"messages.markAsImportantConversation": true,
+	"messages.deleteConversation":          true,
+	"messages.setActivity":                 true,
+	"im.sendAction":                       true,
+}
+
 func (r *Router) BasicHandler(c *gin.Context) {
 	if c.IsAborted() {
 		return
 	}
 
 	slug := c.Param("slug")
+
+	if val, exists := c.Get("userID"); exists {
+		if uID, ok := val.(int64); ok && uID == 0 {
+			if writeMethods[slug] {
+				r.Reject(c, 15, "Access denied: service account cannot perform write operations")
+				return
+			}
+		}
+	}
+
 
 	methods := map[string]func(*gin.Context, *core.BaseHandler){
 		"messages.send":                       messages.Send,

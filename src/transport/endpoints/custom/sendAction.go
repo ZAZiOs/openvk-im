@@ -19,8 +19,9 @@ import (
 )
 
 func SendAction(c *gin.Context, r *core.BaseHandler) {
-	val, exists := c.Get("userID")
+	val, _ := c.Get("userID")
 	currentUserID := val.(int64)
+
 
 	var peerID int64
 	if pID := c.DefaultQuery("peer_id", c.PostForm("peer_id")); pID != "" {

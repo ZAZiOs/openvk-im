@@ -25,17 +25,35 @@ func SearchConversations(c *gin.Context, r *core.BaseHandler) {
 
 	var rows []db_models.ConversationMember
 
-	query := db.Instance.Table("conversation_members").
-		Joins("LEFT JOIN conversations ON conversations.internal_id = conversation_members.internal_chat_id").
-		Where("conversation_members.user_id = ? AND conversation_members.left_at IS NULL", currentUserID).
-		Where(
-			db.Instance.Where("conversation_members.internal_chat_id NOT LIKE ?", "c%").
-				Or("conversations.title LIKE ?", "%"+q+"%"),
-		)
+	var err error
+	if currentUserID == 0 {
+		var convs []db_models.Conversation
+		cQuery := db.Instance.Model(&db_models.Conversation{})
+		if q != "" {
+			cQuery = cQuery.Where("title LIKE ?", "%"+q+"%")
+		}
+		err = cQuery.Find(&convs).Error
+		for _, conv := range convs {
+			rows = append(rows, db_models.ConversationMember{
+				InternalChatID: conv.InternalID,
+				LastMessageID:  conv.LastMessageID,
+				Conversation:   conv,
+			})
+		}
+	} else {
+		query := db.Instance.Table("conversation_members").
+			Joins("LEFT JOIN conversations ON conversations.internal_id = conversation_members.internal_chat_id").
+			Where("conversation_members.user_id = ? AND conversation_members.left_at IS NULL", currentUserID).
+			Where(
+				db.Instance.Where("conversation_members.internal_chat_id NOT LIKE ?", "c%").
+					Or("conversations.title LIKE ?", "%"+q+"%"),
+			)
 
-	err := query.Order("conversation_members.last_message_id DESC").
-		Preload("Conversation").
-		Find(&rows).Error
+		err = query.Order("conversation_members.last_message_id DESC").
+			Preload("Conversation").
+			Find(&rows).Error
+	}
+
 
 	if err != nil {
 		r.Reject(c, 10, "Internal server error")

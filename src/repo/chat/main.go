@@ -383,6 +383,28 @@ func GetInternalChatID(peerID int64, currentUserID int64) string {
 	return "dm" + strconv.FormatInt(u1, 10) + "_" + strconv.FormatInt(u2, 10)
 }
 
+func ResolveChatID(chatIDParam string, peerID int64, userID int64, currentUserID int64) string {
+	if strings.HasPrefix(chatIDParam, "c") || strings.HasPrefix(chatIDParam, "dm") || strings.HasPrefix(chatIDParam, "g") {
+		return chatIDParam
+	}
+	if currentUserID == 0 && userID != 0 && peerID != 0 {
+		return GetInternalChatID(peerID, userID)
+	}
+	if peerID != 0 {
+		return GetInternalChatID(peerID, currentUserID)
+	}
+	if chatIDParam != "" {
+		if id, err := strconv.ParseInt(chatIDParam, 10, 64); err == nil && id > 0 {
+			return GetInternalChatID(2000000000+id, currentUserID)
+		}
+	}
+	if userID != 0 {
+		return GetInternalChatID(userID, currentUserID)
+	}
+	return ""
+}
+
+
 func DerivePeerID(chatID string, currentUserID int64) int64 {
 	if strings.HasPrefix(chatID, "c") {
 		id, _ := strconv.ParseInt(chatID[1:], 10, 64)

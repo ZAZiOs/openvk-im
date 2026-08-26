@@ -151,7 +151,12 @@ type DeletedMessage struct {
 // 3. Messages individually deleted by the user (deleted_messages)
 // 4. Messages before the user's DeletedBeforeID (from deleteConversation)
 func BuildVisibilityFilter(query *gorm.DB, chatID string, userID int64) *gorm.DB {
+	if userID == 0 {
+		return query
+	}
+
 	query = query.Where("messages.deleted_at IS NULL")
+
 
 	if chatID != "" {
 		if strings.HasPrefix(chatID, "c") {

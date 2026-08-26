@@ -17,39 +17,51 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 	currentUserID := val.(int64)
 
 	var peerID int64
+	var uIDParam int64
 	if pID := c.Query("peer_id"); pID != "" {
 		peerID, _ = strconv.ParseInt(pID, 10, 64)
-	} else if uID := c.Query("user_id"); uID != "" {
-		id, _ := strconv.ParseInt(uID, 10, 64)
-		peerID = id
-	} else if chatID := c.Query("chat_id"); chatID != "" {
-		id, _ := strconv.ParseInt(chatID, 10, 64)
-		peerID = 2000000000 + id
+	}
+	if uID := c.Query("user_id"); uID != "" {
+		uIDParam, _ = strconv.ParseInt(uID, 10, 64)
+		if peerID == 0 {
+			peerID = uIDParam
+		}
+	} else if chatIDParam := c.Query("chat_id"); chatIDParam != "" {
+		if id, err := strconv.ParseInt(chatIDParam, 10, 64); err == nil && peerID == 0 {
+			peerID = 2000000000 + id
+		}
 	}
 
-	if peerID == 0 {
+	chatID := chat.ResolveChatID(c.Query("chat_id"), peerID, uIDParam, currentUserID)
+	if chatID == "" {
 		r.Reject(c, 100, "One of the parameters is missing: peer_id, user_id or chat_id")
 		return
 	}
 
-	chatID := chat.GetInternalChatID(peerID, currentUserID)
+	if peerID == 0 {
+		peerID = chat.DerivePeerID(chatID, currentUserID)
+	}
+
 	isGroupChat := strings.HasPrefix(chatID, "c")
 
 	var member *db_models.ConversationMember
-	if isGroupChat {
-		var err error
-		member, err = chat.GetMember(db.Instance, chatID, currentUserID)
-		if err != nil || member == nil || member.LeftAt != nil {
-			r.Reject(c, 917, "You don't have access to this chat")
-			return
-		}
-	} else {
-		member, _ = chat.GetMember(db.Instance, chatID, currentUserID)
-		if member == nil {
-			r.Reject(c, 917, "Conversation doesn't exist")
-			return
+	if currentUserID != 0 {
+		if isGroupChat {
+			var err error
+			member, err = chat.GetMember(db.Instance, chatID, currentUserID)
+			if err != nil || member == nil || member.LeftAt != nil {
+				r.Reject(c, 917, "You don't have access to this chat")
+				return
+			}
+		} else {
+			member, _ = chat.GetMember(db.Instance, chatID, currentUserID)
+			if member == nil {
+				r.Reject(c, 917, "Conversation doesn't exist")
+				return
+			}
 		}
 	}
+
 
 	count, _ := strconv.Atoi(c.DefaultQuery("count", "20"))
 	if count > 200 {

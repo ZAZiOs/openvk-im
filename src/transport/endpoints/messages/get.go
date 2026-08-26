@@ -10,7 +10,9 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
+	"gorm.io/gorm"
 )
+
 
 func GetByID(c *gin.Context, r *core.BaseHandler) {
 	val, _ := c.Get("userID")
@@ -36,8 +38,13 @@ func GetByID(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	var dbMessages []db_models.Message
-	query := dbx.Instance.Where("id IN ? AND chat_id IN (SELECT internal_chat_id FROM conversation_members WHERE user_id = ? AND left_at IS NULL)",
-		ids, currentUserID)
+	var query *gorm.DB
+	if currentUserID == 0 {
+		query = dbx.Instance.Where("id IN ?", ids)
+	} else {
+		query = dbx.Instance.Where("id IN ? AND chat_id IN (SELECT internal_chat_id FROM conversation_members WHERE user_id = ? AND left_at IS NULL)",
+			ids, currentUserID)
+	}
 	query = db_models.BuildVisibilityFilter(query, "", currentUserID)
 	err := query.Find(&dbMessages).Error
 
@@ -79,19 +86,26 @@ func GetByConversationMessageID(c *gin.Context, r *core.BaseHandler) {
 	peerIDStr := c.Query("peer_id")
 	cmidsStr := c.Query("conversation_message_ids")
 
-	if peerIDStr == "" || cmidsStr == "" {
+	if (peerIDStr == "" && c.Query("chat_id") == "") || cmidsStr == "" {
 		r.Reject(c, 100, "One of the parameters is missing: peer_id or conversation_message_ids")
 		return
 	}
 
 	peerID, _ := strconv.ParseInt(peerIDStr, 10, 64)
-	chatID := chat.GetInternalChatID(peerID, currentUserID)
-
-	inChat, _ := chat.IsUserInChat(dbx.Instance, chatID, currentUserID)
-	if !inChat {
-		r.Reject(c, 917, "Access denied")
-		return
+	uIDParam, _ := strconv.ParseInt(c.Query("user_id"), 10, 64)
+	chatID := chat.ResolveChatID(c.Query("chat_id"), peerID, uIDParam, currentUserID)
+	if chatID == "" && peerID != 0 {
+		chatID = chat.GetInternalChatID(peerID, currentUserID)
 	}
+
+	if currentUserID != 0 {
+		inChat, _ := chat.IsUserInChat(dbx.Instance, chatID, currentUserID)
+		if !inChat {
+			r.Reject(c, 917, "Access denied")
+			return
+		}
+	}
+
 
 	idStrings := strings.Split(cmidsStr, ",")
 	var localIDs []uint64

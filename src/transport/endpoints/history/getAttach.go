@@ -3,8 +3,10 @@ package history
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"ovk-im/src/db"
+
 	db_models "ovk-im/src/models/db"
 	"ovk-im/src/repo/chat"
 	"ovk-im/src/transport/endpoints/core"
@@ -34,29 +36,38 @@ func GetHistoryAttachments(c *gin.Context, r *core.BaseHandler) {
 	currentUserID := val.(int64)
 
 	peerID, _ := strconv.ParseInt(c.Query("peer_id"), 10, 64)
-	if peerID == 0 {
+	uIDParam, _ := strconv.ParseInt(c.Query("user_id"), 10, 64)
+	chatID := chat.ResolveChatID(c.Query("chat_id"), peerID, uIDParam, currentUserID)
+
+	if chatID == "" {
 		r.Reject(c, 100, "One of the parameters is missing: peer_id")
 		return
 	}
 
-	chatID := chat.GetInternalChatID(peerID, currentUserID)
-	isGroupChat := peerID > 2000000000
+	if peerID == 0 {
+		peerID = chat.DerivePeerID(chatID, currentUserID)
+	}
+
+	isGroupChat := strings.HasPrefix(chatID, "c")
 
 	var member *db_models.ConversationMember
-	if isGroupChat {
-		var err error
-		member, err = chat.GetMember(db.Instance, chatID, currentUserID)
-		if err != nil || member == nil || member.LeftAt != nil {
-			r.Reject(c, 917, "You don't have access to this chat")
-			return
-		}
-	} else {
-		member, _ = chat.GetMember(db.Instance, chatID, currentUserID)
-		if member == nil {
-			r.Reject(c, 917, "Conversation doesn't exist")
-			return
+	if currentUserID != 0 {
+		if isGroupChat {
+			var err error
+			member, err = chat.GetMember(db.Instance, chatID, currentUserID)
+			if err != nil || member == nil || member.LeftAt != nil {
+				r.Reject(c, 917, "You don't have access to this chat")
+				return
+			}
+		} else {
+			member, _ = chat.GetMember(db.Instance, chatID, currentUserID)
+			if member == nil {
+				r.Reject(c, 917, "Conversation doesn't exist")
+				return
+			}
 		}
 	}
+
 
 	mediaType := c.DefaultQuery("media_type", "photo")
 	count, _ := strconv.Atoi(c.DefaultQuery("count", "30"))

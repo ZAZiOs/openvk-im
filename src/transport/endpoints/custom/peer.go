@@ -37,27 +37,44 @@ func CheckPeerExist(c *gin.Context, r *core.BaseHandler) {
 		return
 	}
 
-	internalChatID := chat.GetInternalChatID(peerID, currentUserID)
-	isGroupChat := strings.HasPrefix(internalChatID, "c")
-
-	var member db_models.ConversationMember
-	err := db.Instance.Where("internal_chat_id = ? AND user_id = ? AND left_at IS NULL", internalChatID, currentUserID).First(&member).Error
+	uIDParam, _ := strconv.ParseInt(c.DefaultQuery("user_id", c.PostForm("user_id")), 10, 64)
+	internalChatID := chat.ResolveChatID(c.DefaultQuery("chat_id", c.PostForm("chat_id")), peerID, uIDParam, currentUserID)
+	if internalChatID == "" && peerID != 0 {
+		internalChatID = chat.GetInternalChatID(peerID, currentUserID)
+	}
 
 	peerExists := false
-	if err == nil {
-		if isGroupChat {
+	if currentUserID == 0 {
+		var count int64
+		db.Instance.Model(&db_models.Message{}).Where("chat_id = ?", internalChatID).Count(&count)
+		if count > 0 {
 			peerExists = true
 		} else {
-			if member.LastMessageID > member.DeletedBeforeID {
-				var count int64
-				q := db.Instance.Model(&db_models.Message{}).Where("chat_id = ?", internalChatID)
-				q = db_models.BuildVisibilityFilter(q, internalChatID, currentUserID)
-				if countErr := q.Count(&count).Error; countErr == nil && count > 0 {
-					peerExists = true
+			var convCount int64
+			db.Instance.Model(&db_models.Conversation{}).Where("internal_id = ?", internalChatID).Count(&convCount)
+			peerExists = convCount > 0
+		}
+	} else {
+		isGroupChat := strings.HasPrefix(internalChatID, "c")
+		var member db_models.ConversationMember
+		err := db.Instance.Where("internal_chat_id = ? AND user_id = ? AND left_at IS NULL", internalChatID, currentUserID).First(&member).Error
+
+		if err == nil {
+			if isGroupChat {
+				peerExists = true
+			} else {
+				if member.LastMessageID > member.DeletedBeforeID {
+					var count int64
+					q := db.Instance.Model(&db_models.Message{}).Where("chat_id = ?", internalChatID)
+					q = db_models.BuildVisibilityFilter(q, internalChatID, currentUserID)
+					if countErr := q.Count(&count).Error; countErr == nil && count > 0 {
+						peerExists = true
+					}
 				}
 			}
 		}
 	}
+
 
 	c.JSON(http.StatusOK, gin.H{
 		"response": gin.H{
