@@ -80,7 +80,7 @@ func CreateChat(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	baseEvent := lp_models.NewMessageEvent{
-		MessageID:   uint64(msg.ID),
+		MessageID:   msg.LocalID,
 		PeerID:      chat.DerivePeerID(conv.InternalID, currentUserID),
 		Timestamp:   int(msg.CreatedAt.Unix()),
 		Text:        messageText,
@@ -89,10 +89,21 @@ func CreateChat(c *gin.Context, r *core.BaseHandler) {
 
 	allParticipants := append(userIDs, currentUserID)
 
-	go func(participants []int64, event lp_models.NewMessageEvent) {
+	go func(participants []int64, event lp_models.NewMessageEvent, peerID int64) {
 		ctx := context.Background()
 
 		for _, uID := range participants {
+			var selfFlag uint8 = 0
+			if uID == currentUserID {
+				selfFlag = 1
+			}
+
+			// LP Event 51: chat created/updated
+			r.LPRepo.PushEvent(ctx, uID, "chat_something_changed", lp_models.ChatSomethingChangedEvent{
+				ChatID: peerID,
+				Self:   selfFlag,
+			})
+
 			userEvent := event
 			userEvent.Flags = lp_models.MessageFlags{Value: event.Flags.Value}
 
@@ -107,7 +118,7 @@ func CreateChat(c *gin.Context, r *core.BaseHandler) {
 				r.Broadcaster.Notify(uID)
 			}
 		}
-	}(allParticipants, baseEvent)
+	}(allParticipants, baseEvent, chat.DerivePeerID(conv.InternalID, currentUserID))
 
 	c.JSON(http.StatusOK, gin.H{
 		"response": conv.ID,

@@ -120,48 +120,27 @@ func GetConversation(tx *gorm.DB, chatID string) (*db_models.Conversation, error
 
 func CreateConversation(ownerID int64, userIDs []int64, groupTitle string) (*db_models.Conversation, error) {
 	var conv db_models.Conversation
-	isGroupChat := groupTitle != ""
 	err := dbx.Instance.Transaction(func(tx *gorm.DB) error {
-		var chatID string
-		var targetPeerID int64
-		if !isGroupChat {
-			targetPeerID = userIDs[0]
-			chatID = GetInternalChatID(targetPeerID, ownerID)
-
-			existing, _ := GetConversation(tx, chatID)
-			if existing != nil {
-				conv = *existing
-				return nil
-			}
-		}
-
 		conv = db_models.Conversation{
-			InternalID: chatID,
-			OwnerID:    &ownerID,
-			Title:      groupTitle,
-			Settings:   []byte("{}"),
-			CreatedAt:  time.Now(),
+			OwnerID:   &ownerID,
+			Title:     groupTitle,
+			Settings:  []byte("{}"),
+			CreatedAt: time.Now(),
 		}
 
 		if err := tx.Create(&conv).Error; err != nil {
 			return err
 		}
 
-		if isGroupChat {
-			conv.InternalID = "c" + strconv.FormatUint(conv.ID, 10)
+		conv.InternalID = "c" + strconv.FormatUint(conv.ID, 10)
 
-			if err := tx.Table("conversations").Where("id = ?", conv.ID).Updates(map[string]interface{}{
-				"internal_id": conv.InternalID,
-			}).Error; err != nil {
-				return err
-			}
-
-			chatID = conv.InternalID
-		} else {
-			if err := tx.Table("conversations").Where("id = ?", conv.ID).Update("internal_id", chatID).Error; err != nil {
-				return err
-			}
+		if err := tx.Table("conversations").Where("id = ?", conv.ID).Updates(map[string]interface{}{
+			"internal_id": conv.InternalID,
+		}).Error; err != nil {
+			return err
 		}
+
+		chatID := conv.InternalID
 
 		var members []db_models.ConversationMember
 		var periods []db_models.ConversationMemberPeriod
