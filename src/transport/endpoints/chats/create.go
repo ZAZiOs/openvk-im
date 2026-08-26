@@ -16,13 +16,9 @@ func CreateChat(c *gin.Context, r *core.BaseHandler) {
 	val, _ := c.Get("userID")
 	currentUserID := val.(int64)
 
-	title := c.Query("title")
+	title := strings.TrimSpace(c.Query("title"))
 	userIDsRaw := c.Query("user_ids")
 
-	if title == "" {
-		r.Reject(c, 100, "One of the parameters is missing: title")
-		return
-	}
 	if userIDsRaw == "" {
 		r.Reject(c, 100, "One of the parameters is missing: user_ids")
 		return
@@ -50,7 +46,10 @@ func CreateChat(c *gin.Context, r *core.BaseHandler) {
 		return
 	}
 
-	messageText := "created conversation «" + title + "»"
+	messageText := "created conversation"
+	if title != "" {
+		messageText = "created conversation «" + title + "»"
+	}
 	msg, err := chat.CreateServiceMessage(
 		currentUserID,
 		conv.InternalID,

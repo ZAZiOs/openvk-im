@@ -314,6 +314,11 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 			localID := id - 2000000000
 			intKey := fmt.Sprintf("c%d", localID)
 
+			members := chatMembersMap[intKey]
+			if members == nil {
+				members = []int64{}
+			}
+
 			extendedChats = append(extendedChats, gin.H{
 				"id":          id,
 				"type":        "chat",
@@ -325,6 +330,7 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 				"photo_50":    "",
 				"photo_100":   "",
 				"photo_200":   "",
+				"members":     members,
 			})
 		}
 
