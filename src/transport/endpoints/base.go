@@ -97,6 +97,7 @@ func (r *Router) BasicHandler(c *gin.Context) {
 		"im.getUnreadConversations": custom.GetUnreadConversations,
 		"im.getMe":                  custom.GetMe,
 		"im.checkPeerExist":         custom.CheckPeerExist,
+		"im.sendAction":             custom.SendAction,
 	}
 
 	handler, exists := methods[slug]
