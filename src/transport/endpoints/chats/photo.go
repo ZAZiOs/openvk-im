@@ -66,7 +66,8 @@ func SetChatPhoto(c *gin.Context, r *core.BaseHandler) {
 		}
 
 		baseEvent := lp_models.NewMessageEvent{
-			MessageID:   msg.LocalID,
+			MessageID:   msg.ID,
+			MinorID:     int64(msg.LocalID),
 			PeerID:      peerID,
 			Timestamp:   int(msg.CreatedAt.Unix()),
 			Text:        messageText,
@@ -104,7 +105,7 @@ func SetChatPhoto(c *gin.Context, r *core.BaseHandler) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"response": gin.H{
-			"message_id": msg.LocalID,
+			"message_id": msg.ID,
 		},
 	})
 }
@@ -161,7 +162,8 @@ func DeleteChatPhoto(c *gin.Context, r *core.BaseHandler) {
 		}
 
 		baseEvent := lp_models.NewMessageEvent{
-			MessageID:   msg.LocalID,
+			MessageID:   msg.ID,
+			MinorID:     int64(msg.LocalID),
 			PeerID:      peerID,
 			Timestamp:   int(msg.CreatedAt.Unix()),
 			Text:        messageText,
@@ -197,7 +199,7 @@ func DeleteChatPhoto(c *gin.Context, r *core.BaseHandler) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"response": gin.H{
-			"message_id": msg.LocalID,
+			"message_id": msg.ID,
 		},
 	})
 }

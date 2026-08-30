@@ -8,11 +8,99 @@ import (
 	"ovk-im/src/transport/endpoints/core"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
 
+func Get(c *gin.Context, r *core.BaseHandler) {
+	val, _ := c.Get("userID")
+	currentUserID := val.(int64)
+
+	out, _ := strconv.Atoi(c.DefaultQuery("out", "0"))
+	offset, _ := strconv.Atoi(c.DefaultQuery("offset", "0"))
+	count, _ := strconv.Atoi(c.DefaultQuery("count", "20"))
+	if count > 200 {
+		count = 200
+	}
+	timeOffset, _ := strconv.Atoi(c.DefaultQuery("time_offset", "0"))
+	filters, _ := strconv.Atoi(c.DefaultQuery("filters", "0"))
+	lastMessageID, _ := strconv.ParseUint(c.DefaultQuery("last_message_id", "0"), 10, 64)
+	previewLength, _ := strconv.Atoi(c.DefaultQuery("preview_length", "0"))
+
+	query := dbx.Instance.Table("messages").
+		Joins("JOIN conversation_members ON conversation_members.internal_chat_id = messages.chat_id AND conversation_members.user_id = ? AND conversation_members.left_at IS NULL", currentUserID).
+		Where("messages.deleted_at IS NULL").
+		Where("messages.local_id > conversation_members.deleted_before_id")
+
+	if out == 1 {
+		query = query.Where("messages.from_id = ?", currentUserID)
+	} else {
+		query = query.Where("messages.from_id != ?", currentUserID)
+	}
+
+	if timeOffset > 0 {
+		since := time.Now().Add(-time.Duration(timeOffset) * time.Second)
+		query = query.Where("messages.created_at >= ?", since)
+	}
+
+	if (filters & 4) == 0 {
+		if (filters & 1) != 0 {
+			query = query.Where("messages.local_id > conversation_members.last_read_id")
+		}
+		if (filters & 2) != 0 {
+			query = query.Where("messages.chat_id NOT LIKE 'chat:%'")
+		}
+	}
+
+	if lastMessageID > 0 {
+		query = query.Where("messages.id < ?", lastMessageID)
+	}
+
+	var totalCount int64
+	query.Count(&totalCount)
+
+	var dbMessages []db_models.Message
+	err := query.Order("messages.created_at DESC, messages.id DESC").
+		Limit(count).Offset(offset).
+		Find(&dbMessages).Error
+
+	if err != nil {
+		r.Reject(c, 10, "Internal server error")
+		return
+	}
+
+	items := make([]db_models.VKApiMessage, 0, len(dbMessages))
+	for _, m := range dbMessages {
+		mPeerID := chat.DerivePeerID(m.ChatID, currentUserID)
+		vkMsg := m.ToVKApiStruct(dbx.Instance, 5, currentUserID, mPeerID)
+		if previewLength > 0 && len([]rune(vkMsg.Text)) > previewLength {
+			runes := []rune(vkMsg.Text)
+			vkMsg.Text = string(runes[:previewLength]) + "..."
+		}
+		items = append(items, vkMsg)
+	}
+
+	response := gin.H{
+		"count": totalCount,
+		"items": items,
+	}
+
+	if c.Query("extended") == "1" {
+		var userIDs []int64
+		var groupIDs []int64
+
+		core.CollectAllEntityIDs(items, &userIDs, &groupIDs)
+
+		response["profiles"] = userIDs
+		response["groups"] = groupIDs
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"response": response,
+	})
+}
 
 func GetByID(c *gin.Context, r *core.BaseHandler) {
 	val, _ := c.Get("userID")

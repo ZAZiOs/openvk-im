@@ -44,12 +44,18 @@ func Delete(c *gin.Context, r *core.BaseHandler) {
 		return
 	}
 
-	chatID := chat.GetInternalChatID(peerID, currentUserID)
-
 	var msgs []db_models.Message
-	if err := dbx.Instance.Where("chat_id = ? AND local_id IN ?", chatID, localIDs).Find(&msgs).Error; err != nil || len(msgs) == 0 {
-		r.Reject(c, 946, "Messages not found")
-		return
+	if peerID != 0 {
+		chatID := chat.GetInternalChatID(peerID, currentUserID)
+		if err := dbx.Instance.Where("chat_id = ? AND (local_id IN ? OR id IN ?)", chatID, localIDs, localIDs).Find(&msgs).Error; err != nil || len(msgs) == 0 {
+			r.Reject(c, 946, "Messages not found")
+			return
+		}
+	} else {
+		if err := dbx.Instance.Where("id IN ?", localIDs).Find(&msgs).Error; err != nil || len(msgs) == 0 {
+			r.Reject(c, 946, "Messages not found")
+			return
+		}
 	}
 
 	if deleteAll {
@@ -69,7 +75,10 @@ func Delete(c *gin.Context, r *core.BaseHandler) {
 
 	err := dbx.Instance.Transaction(func(tx *gorm.DB) error {
 		now := time.Now()
+		affectedChats := make(map[string]bool)
 		for _, msg := range msgs {
+			msgChatID := msg.ChatID
+			affectedChats[msgChatID] = true
 			if deleteAll {
 				newFlags := msg.Flags | 128 | 64
 				updates := map[string]interface{}{
@@ -81,26 +90,28 @@ func Delete(c *gin.Context, r *core.BaseHandler) {
 					continue
 				}
 
+				results[strconv.FormatUint(msg.ID, 10)] = 1
 				results[strconv.FormatUint(msg.LocalID, 10)] = 1
-				r.SendDeleteEvent(currentUserID, chatID, msg.LocalID, newFlags, true)
+				r.SendDeleteEvent(currentUserID, msgChatID, msg.LocalID, newFlags, true)
 			} else {
 				// Delete for current user only
 				delRecord := db_models.DeletedMessage{
 					UserID:  currentUserID,
-					ChatID:  chatID,
+					ChatID:  msgChatID,
 					LocalID: msg.LocalID,
 				}
 				if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&delRecord).Error; err != nil {
 					continue
 				}
 
+				results[strconv.FormatUint(msg.ID, 10)] = 1
 				results[strconv.FormatUint(msg.LocalID, 10)] = 1
-				r.SendDeleteEvent(currentUserID, chatID, msg.LocalID, msg.Flags|128, false)
+				r.SendDeleteEvent(currentUserID, msgChatID, msg.LocalID, msg.Flags|128, false)
 			}
 		}
 
-		if len(msgs) > 0 {
-			chat.RefreshChatLastMessage(tx, chatID)
+		for cID := range affectedChats {
+			chat.RefreshChatLastMessage(tx, cID)
 		}
 
 		return nil
@@ -124,22 +135,34 @@ func Restore(c *gin.Context, r *core.BaseHandler) {
 	peerID, _ := strconv.ParseInt(c.Query("peer_id"), 10, 64)
 	messageID, _ := strconv.ParseUint(c.Query("message_id"), 10, 64)
 
-	if peerID == 0 || messageID == 0 {
-		r.Reject(c, 100, "One of the parameters is missing: peer_id or message_id")
+	if messageID == 0 {
+		r.Reject(c, 100, "One of the parameters is missing: message_id")
 		return
 	}
 
-	chatID := chat.GetInternalChatID(peerID, currentUserID)
+	var chatID string
+	if peerID != 0 {
+		chatID = chat.GetInternalChatID(peerID, currentUserID)
+	}
 
 	err := dbx.Instance.Transaction(func(tx *gorm.DB) error {
 		var msg db_models.Message
-		if err := tx.Where("chat_id = ? AND local_id = ?", chatID, messageID).First(&msg).Error; err != nil {
+		var err error
+		if chatID != "" {
+			err = tx.Where("chat_id = ? AND (local_id = ? OR id = ?)", chatID, messageID, messageID).First(&msg).Error
+		} else {
+			err = tx.Where("id = ?", messageID).First(&msg).Error
+			if err == nil {
+				chatID = msg.ChatID
+			}
+		}
+		if err != nil {
 			return err
 		}
 
 		// First check if deleted only for current user
 		var delRecord db_models.DeletedMessage
-		res := tx.Where("user_id = ? AND chat_id = ? AND local_id = ?", currentUserID, chatID, messageID).Delete(&delRecord)
+		res := tx.Where("user_id = ? AND chat_id = ? AND local_id = ?", currentUserID, chatID, msg.LocalID).Delete(&delRecord)
 		if res.RowsAffected > 0 {
 			r.SendRestoreEvent(currentUserID, chatID, msg.LocalID, msg.Flags, false)
 			return nil

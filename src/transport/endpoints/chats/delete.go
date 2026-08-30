@@ -17,6 +17,18 @@ func DeleteConversation(c *gin.Context, r *core.BaseHandler) {
 
 	peerID, _ := strconv.ParseInt(c.Query("peer_id"), 10, 64)
 	if peerID == 0 {
+		if uID, err := strconv.ParseInt(c.Query("user_id"), 10, 64); err == nil && uID != 0 {
+			peerID = uID
+		} else if cID, err := strconv.ParseInt(c.Query("chat_id"), 10, 64); err == nil && cID != 0 {
+			if cID > 2000000000 {
+				peerID = cID
+			} else {
+				peerID = 2000000000 + cID
+			}
+		}
+	}
+
+	if peerID == 0 {
 		r.Reject(c, 100, "One of the parameters is missing: peer_id")
 		return
 	}

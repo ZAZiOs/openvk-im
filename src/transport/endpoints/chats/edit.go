@@ -18,11 +18,18 @@ func EditChat(c *gin.Context, r *core.BaseHandler) {
 	val, _ := c.Get("userID")
 	currentUserID := val.(int64)
 
-	peerID, _ := strconv.ParseInt(c.Query("peer_id"), 10, 64)
+	var peerID int64
+	if pID := c.Query("peer_id"); pID != "" {
+		peerID, _ = strconv.ParseInt(pID, 10, 64)
+	} else if cID := c.Query("chat_id"); cID != "" {
+		id, _ := strconv.ParseInt(cID, 10, 64)
+		peerID = 2000000000 + id
+	}
+
 	title := strings.TrimSpace(c.Query("title"))
 
 	if peerID == 0 {
-		r.Reject(c, 100, "One of the parameters is missing: peer_id")
+		r.Reject(c, 100, "One of the parameters is missing: peer_id or chat_id")
 		return
 	}
 	if title == "" {

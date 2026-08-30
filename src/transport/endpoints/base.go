@@ -97,6 +97,7 @@ func (r *Router) BasicHandler(c *gin.Context) {
 	}
 
 	methods := map[string]func(*gin.Context, *core.BaseHandler){
+		"messages.get":                        messages.Get,
 		"messages.send":                       messages.Send,
 		"messages.edit":                       messages.Edit,
 		"messages.search":                     messages.Search,
@@ -138,6 +139,12 @@ func (r *Router) BasicHandler(c *gin.Context) {
 		"im.checkPeerExist":         custom.CheckPeerExist,
 		"im.sendAction":             custom.SendAction,
 		"im.getPinnedMessage":       messages.GetPinnedMessage,
+
+		// Legacy aliases (VK API <=5.80)
+		"messages.getDialogs":    chats.GetConversations,
+		"messages.deleteDialog":  chats.DeleteConversation,
+		"messages.searchDialogs": chats.SearchConversations,
+		"messages.getChatUsers":  chats.GetConversationMembers,
 	}
 
 	handler, exists := methods[slug]

@@ -72,6 +72,7 @@ func SendAction(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	var finalLocalID uint64
+	var finalMessageID uint64
 	err := dbx.Instance.Transaction(func(tx *gorm.DB) error {
 		localID, err := chat.NextLocalID(tx, internalChatID, currentUserID)
 		if err != nil {
@@ -114,6 +115,7 @@ func SendAction(c *gin.Context, r *core.BaseHandler) {
 		if err := tx.Create(&newMessage).Error; err != nil {
 			return err
 		}
+		finalMessageID = newMessage.ID
 
 		if err := tx.Model(&db_models.Conversation{}).
 			Where("internal_id = ?", internalChatID).
@@ -157,7 +159,8 @@ func SendAction(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	lpEvent := lp_models.NewMessageEvent{
-		MessageID:   finalLocalID,
+		MessageID:   finalMessageID,
+		MinorID:     int64(finalLocalID),
 		Flags:       lp_models.MessageFlags{Value: 0},
 		PeerID:      peerID,
 		Timestamp:   int(time.Now().Unix()),
@@ -198,6 +201,6 @@ func SendAction(c *gin.Context, r *core.BaseHandler) {
 	}(recipients, lpEvent, currentUserID)
 
 	c.JSON(http.StatusOK, gin.H{
-		"response": finalLocalID,
+		"response": finalMessageID,
 	})
 }

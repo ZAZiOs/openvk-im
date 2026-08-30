@@ -22,19 +22,35 @@ func Edit(c *gin.Context, r *core.BaseHandler) {
 
 	peerID, _ := strconv.ParseInt(c.Query("peer_id"), 10, 64)
 	messageID, _ := strconv.ParseUint(c.Query("message_id"), 10, 64)
+	cmid, _ := strconv.ParseUint(c.Query("conversation_message_id"), 10, 64)
+	if messageID == 0 && cmid != 0 {
+		messageID = cmid
+	}
 	newMessageText, textExists := c.GetQuery("message")
 	newAttachment, attachExists := c.GetQuery("attachment")
 	keepForward := c.Query("keep_forward_messages") == "1"
 
-	if peerID == 0 || messageID == 0 {
-		r.Reject(c, 100, "One of the parameters is missing: peer_id or message_id")
+	if messageID == 0 {
+		r.Reject(c, 100, "One of the parameters is missing: message_id or conversation_message_id")
 		return
 	}
 
-	chatID := chat.GetInternalChatID(peerID, currentUserID)
+	var chatID string
+	if peerID != 0 {
+		chatID = chat.GetInternalChatID(peerID, currentUserID)
+	}
 
 	var msg db_models.Message
-	err := dbx.Instance.Where("chat_id = ? AND local_id = ?", chatID, messageID).First(&msg).Error
+	var err error
+	if chatID != "" {
+		err = dbx.Instance.Where("chat_id = ? AND (local_id = ? OR id = ?)", chatID, messageID, messageID).First(&msg).Error
+	} else {
+		err = dbx.Instance.Where("id = ?", messageID).First(&msg).Error
+		if err == nil {
+			chatID = msg.ChatID
+			peerID = chat.DerivePeerID(chatID, currentUserID)
+		}
+	}
 	if err != nil {
 		r.Reject(c, 910, "Can't edit this message, maybe it has been deleted")
 		return

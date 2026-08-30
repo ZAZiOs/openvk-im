@@ -17,7 +17,11 @@ func Pin(c *gin.Context, r *core.BaseHandler) {
 	currentUserID := val.(int64)
 
 	peerID, _ := strconv.ParseInt(c.Query("peer_id"), 10, 64)
-	messageID, _ := strconv.ParseUint(c.Query("message_id"), 10, 64) // Это local_id от клиента
+	messageID, _ := strconv.ParseUint(c.Query("message_id"), 10, 64)
+	cmid, _ := strconv.ParseUint(c.Query("conversation_message_id"), 10, 64)
+	if messageID == 0 && cmid != 0 {
+		messageID = cmid
+	}
 
 	if peerID == 0 || messageID == 0 {
 		r.Reject(c, 100, "One of the parameters is missing: peer_id or message_id")
@@ -41,7 +45,7 @@ func Pin(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	var msg db_models.Message
-	q := db.Instance.Where("chat_id = ? AND local_id = ?", chatID, messageID)
+	q := db.Instance.Where("chat_id = ? AND (local_id = ? OR id = ?)", chatID, messageID, messageID)
 	q = db_models.BuildVisibilityFilter(q, chatID, currentUserID)
 	if err := q.First(&msg).Error; err != nil {
 		r.Reject(c, 946, "Message not found")
@@ -50,7 +54,7 @@ func Pin(c *gin.Context, r *core.BaseHandler) {
 
 	err := db.Instance.Model(&db_models.Conversation{}).
 		Where("internal_id = ?", chatID).
-		Update("pinned_msg_id", messageID).Error
+		Update("pinned_msg_id", msg.LocalID).Error
 
 	if err != nil {
 		r.Reject(c, 10, "Internal server error")

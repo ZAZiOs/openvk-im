@@ -190,24 +190,25 @@ func BuildVisibilityFilter(query *gorm.DB, chatID string, userID int64) *gorm.DB
 // ----- METHODS -----
 
 type VKApiMessage struct {
-	ID              uint64         `json:"id"`
-	GlobalID        uint64         `json:"global_id"`
-	Date            int64          `json:"date"`
-	IsEdited        bool           `json:"edited"`
-	EditedAt        int64          `json:"edited_at,omitempty"`
-	PeerID          int64          `json:"peer_id"`
-	FromID          int64          `json:"from_id"`
-	Out             int            `json:"out"`
-	ReadState       int            `json:"read_state"`
-	ReadBy          []int64        `json:"read_by"`
-	Text            string         `json:"text"`
-	RandomID        int64          `json:"random_id,omitempty"`
-	Attachments     string         `json:"attachments"`
-	Important       bool           `json:"important"`
-	IsPinned        int            `json:"is_pinned"`
-	ReplyMessage    *VKApiMessage  `json:"reply_message,omitempty"`
-	ForwardMessages []VKApiMessage `json:"fwd_messages,omitempty"`
-	Action          interface{}    `json:"action,omitempty"`
+	ID                    uint64         `json:"id"`
+	ConversationMessageID uint64         `json:"conversation_message_id"`
+	GlobalID              uint64         `json:"global_id,omitempty"`
+	Date                  int64          `json:"date"`
+	IsEdited              bool           `json:"edited,omitempty"`
+	EditedAt              int64          `json:"edited_at,omitempty"`
+	PeerID                int64          `json:"peer_id"`
+	FromID                int64          `json:"from_id"`
+	Out                   int            `json:"out"`
+	ReadState             int            `json:"read_state"`
+	ReadBy                []int64        `json:"read_by,omitempty"`
+	Text                  string         `json:"text"`
+	RandomID              int64          `json:"random_id,omitempty"`
+	Attachments           string         `json:"attachments"`
+	Important             bool           `json:"important"`
+	IsPinned              int            `json:"is_pinned,omitempty"`
+	ReplyMessage          *VKApiMessage  `json:"reply_message,omitempty"`
+	ForwardMessages       []VKApiMessage `json:"fwd_messages,omitempty"`
+	Action                interface{}    `json:"action,omitempty"`
 }
 
 type MemberReadState struct {
@@ -305,15 +306,16 @@ func (m *Message) ToVKApiStruct(tx *gorm.DB, depth int, currentUserID int64, req
 
 func (m *Message) ToVKApiStructBatch(tx *gorm.DB, depth int, currentUserID int64, requestedPeerID int64, cache map[uint64]Message, readCache map[string][]MemberReadState, pinnedCache map[string]uint64) VKApiMessage {
 	vkMsg := VKApiMessage{
-		ID:          m.LocalID,
-		GlobalID:    m.ID,
-		Date:        m.CreatedAt.Unix(),
-		PeerID:      requestedPeerID,
-		FromID:      m.FromID,
-		Text:        string(m.Text),
-		RandomID:    m.RandomID,
-		Important:   m.Important,
-		Attachments: string(m.Attachments),
+		ID:                    m.ID,
+		ConversationMessageID: m.LocalID,
+		GlobalID:              m.ID,
+		Date:                  m.CreatedAt.Unix(),
+		PeerID:                requestedPeerID,
+		FromID:                m.FromID,
+		Text:                  string(m.Text),
+		RandomID:              m.RandomID,
+		Important:             m.Important,
+		Attachments:           string(m.Attachments),
 	}
 
 	if m.FromID == currentUserID {
@@ -403,16 +405,19 @@ func (m *Message) ToVKApiStructBatch(tx *gorm.DB, depth int, currentUserID int64
 // ---- CONVERSATIONS ----
 
 type VKApiConversation struct {
-	Peer          VKApiPeer       `json:"peer"`
-	InRead        uint64          `json:"in_read"`
-	OutRead       uint64          `json:"out_read"`
-	UnreadCount   int             `json:"unread_count"`
-	Important     bool            `json:"important,omitempty"`
-	Unanswered    bool            `json:"unanswered,omitempty"`
-	PushSettings  *VKPushSettings `json:"push_settings,omitempty"`
-	CanWrite      VKCanWrite      `json:"can_write"`
-	ChatSettings  *VKChatSettings `json:"chat_settings,omitempty"`
-	LastMessageID uint64          `json:"last_message_id,omitempty"`
+	Peer                      VKApiPeer       `json:"peer"`
+	InRead                    uint64          `json:"in_read"`
+	OutRead                   uint64          `json:"out_read"`
+	InReadCmid                uint64          `json:"in_read_cmid,omitempty"`
+	OutReadCmid               uint64          `json:"out_read_cmid,omitempty"`
+	UnreadCount               int             `json:"unread_count"`
+	Important                 bool            `json:"important,omitempty"`
+	Unanswered                bool            `json:"unanswered,omitempty"`
+	PushSettings              *VKPushSettings `json:"push_settings,omitempty"`
+	CanWrite                  VKCanWrite      `json:"can_write"`
+	ChatSettings              *VKChatSettings `json:"chat_settings,omitempty"`
+	LastMessageID             uint64          `json:"last_message_id,omitempty"`
+	LastConversationMessageID uint64          `json:"last_conversation_message_id,omitempty"`
 }
 
 type VKApiPeer struct {
@@ -492,13 +497,17 @@ func (c *Conversation) ToVKApiStruct(tx *gorm.DB, currentUserID int64, member *C
 			Type:    peerType,
 			LocalID: localID,
 		},
-		LastMessageID: c.LastMessageID,
-		InRead:        c.InReadID,
-		OutRead:       c.OutReadID,
+		LastMessageID:             c.LastMessageID,
+		LastConversationMessageID: c.LastMessageID,
+		InRead:                    c.InReadID,
+		OutRead:                   c.OutReadID,
+		InReadCmid:                c.InReadID,
+		OutReadCmid:               c.OutReadID,
 	}
 
 	if member != nil {
 		conv.InRead = member.LastReadID
+		conv.InReadCmid = member.LastReadID
 		conv.CanWrite = VKCanWrite{
 			Allowed: member.LeftAt == nil,
 		}

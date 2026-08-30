@@ -80,7 +80,8 @@ func CreateChat(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	baseEvent := lp_models.NewMessageEvent{
-		MessageID:   msg.LocalID,
+		MessageID:   msg.ID,
+		MinorID:     int64(msg.LocalID),
 		PeerID:      chat.DerivePeerID(conv.InternalID, currentUserID),
 		Timestamp:   int(msg.CreatedAt.Unix()),
 		Text:        messageText,

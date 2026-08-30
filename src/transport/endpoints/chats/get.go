@@ -218,18 +218,25 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 
 		var majorID int64 = 0
 		var minorID uint64 = m.LastMessageID
+		var lastMsgID uint64 = 0
+		var lastCMID uint64 = m.LastMessageID
 		if hasMsg {
 			majorID = lastMsg.CreatedAt.Unix()
 			minorID = lastMsg.LocalID
+			lastMsgID = lastMsg.ID
+			lastCMID = lastMsg.LocalID
 		}
 
 		conversationObj := gin.H{
-			"peer":            gin.H{"id": pID, "type": getPeerType(m.InternalChatID)},
-			"last_message_id": m.LastMessageID,
-			"in_read":         m.LastReadID,
-			"out_read":        m.LastMessageID,
-			"important":       (m.Flags & 1) != 0,
-			"unanswered":      (m.Flags & 2) != 0,
+			"peer":                         gin.H{"id": pID, "type": getPeerType(m.InternalChatID)},
+			"last_message_id":              lastMsgID,
+			"last_conversation_message_id": lastCMID,
+			"in_read":                      m.LastReadID,
+			"out_read":                     m.LastMessageID,
+			"in_read_cmid":                 m.LastReadID,
+			"out_read_cmid":                m.LastMessageID,
+			"important":                    (m.Flags & 1) != 0,
+			"unanswered":                   (m.Flags & 2) != 0,
 			"sort_id": gin.H{
 				"major_id": majorID,
 				"minor_id": minorID,
@@ -584,18 +591,25 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 
 		var majorID int64 = 0
 		var minorID uint64 = m.LastMessageID
+		var lastMsgID uint64 = 0
+		var lastCMID uint64 = m.LastMessageID
 		if hasMsg {
 			majorID = lastMsg.CreatedAt.Unix()
 			minorID = lastMsg.LocalID
+			lastMsgID = lastMsg.ID
+			lastCMID = lastMsg.LocalID
 		}
 
 		convObj := gin.H{
-			"peer":            gin.H{"id": pID, "type": getPeerType(m.InternalChatID)},
-			"last_message_id": m.LastMessageID,
-			"in_read":         m.LastReadID,
-			"out_read":        m.LastMessageID,
-			"important":       (m.Flags & 1) != 0,
-			"unanswered":      (m.Flags & 2) != 0,
+			"peer":                         gin.H{"id": pID, "type": getPeerType(m.InternalChatID)},
+			"last_message_id":              lastMsgID,
+			"last_conversation_message_id": lastCMID,
+			"in_read":                      m.LastReadID,
+			"out_read":                     m.LastMessageID,
+			"in_read_cmid":                 m.LastReadID,
+			"out_read_cmid":                m.LastMessageID,
+			"important":                    (m.Flags & 1) != 0,
+			"unanswered":                   (m.Flags & 2) != 0,
 			"sort_id": gin.H{
 				"major_id": majorID,
 				"minor_id": minorID,
