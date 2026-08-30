@@ -103,4 +103,27 @@ if (isset($data['code']) && $data['code'] === 5) {
 "response": uint64
 ```
 
+### im.getPinnedMessage
+Возвращает закреплённое сообщение в беседе или диалоге.
 
+Параметры:
+* `peer_id` (int64) — ID получателя/беседы (или `user_id` / `chat_id`).
+* `extended` (int, опционально) — если равен `1`, возвращает дополнительные массивы `profiles` и `groups`.
+
+В объекте сообщения `VKApiMessage` возвращается новое поле `is_pinned` (`1` если сообщение закреплено, `0` если нет).
+
+Возвращает:
+```json
+"response": {
+    "count": 1,
+    "items": [ VKApiMessage ],
+    "pinned_message": VKApiMessage
+}
+```
+Если закрепленное сообщение отсутствует:
+```json
+"response": {
+    "count": 0,
+    "items": []
+}
+```

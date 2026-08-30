@@ -97,7 +97,7 @@ func SearchConversations(c *gin.Context, r *core.BaseHandler) {
 
 		responseItems = append(responseItems, gin.H{
 			"conversation": convObj,
-			"last_message": lastMsg.ToVKApiStructBatch(db.Instance, 1, currentUserID, pID, nil, nil),
+			"last_message": lastMsg.ToVKApiStructBatch(db.Instance, 1, currentUserID, pID, nil, nil, nil),
 		})
 	}
 

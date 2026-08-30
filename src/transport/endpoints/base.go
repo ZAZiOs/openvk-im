@@ -5,7 +5,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
-	"ovk-im/src/config"
+	env "ovk-im/src/config"
 	"ovk-im/src/transport/endpoints/chats"
 	"ovk-im/src/transport/endpoints/core"
 	"ovk-im/src/transport/endpoints/custom"
@@ -59,14 +59,14 @@ func (r *Router) Register(group *gin.RouterGroup) {
 }
 
 var writeMethods = map[string]bool{
-	"messages.send":                       true,
-	"messages.edit":                       true,
-	"messages.pin":                        true,
-	"messages.unpin":                      true,
-	"messages.markAsImportant":            true,
-	"messages.markAsRead":                 true,
-	"messages.delete":                     true,
-	"messages.restore":                    true,
+	"messages.send":                        true,
+	"messages.edit":                        true,
+	"messages.pin":                         true,
+	"messages.unpin":                       true,
+	"messages.markAsImportant":             true,
+	"messages.markAsRead":                  true,
+	"messages.delete":                      true,
+	"messages.restore":                     true,
 	"messages.createChat":                  true,
 	"messages.editChat":                    true,
 	"messages.setChatPhoto":                true,
@@ -77,7 +77,7 @@ var writeMethods = map[string]bool{
 	"messages.markAsImportantConversation": true,
 	"messages.deleteConversation":          true,
 	"messages.setActivity":                 true,
-	"im.sendAction":                       true,
+	"im.sendAction":                        true,
 }
 
 func (r *Router) BasicHandler(c *gin.Context) {
@@ -95,7 +95,6 @@ func (r *Router) BasicHandler(c *gin.Context) {
 			}
 		}
 	}
-
 
 	methods := map[string]func(*gin.Context, *core.BaseHandler){
 		"messages.send":                       messages.Send,
@@ -138,6 +137,7 @@ func (r *Router) BasicHandler(c *gin.Context) {
 		"im.getMe":                  custom.GetMe,
 		"im.checkPeerExist":         custom.CheckPeerExist,
 		"im.sendAction":             custom.SendAction,
+		"im.getPinnedMessage":       messages.GetPinnedMessage,
 	}
 
 	handler, exists := methods[slug]

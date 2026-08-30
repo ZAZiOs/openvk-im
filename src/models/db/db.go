@@ -204,6 +204,7 @@ type VKApiMessage struct {
 	RandomID        int64          `json:"random_id,omitempty"`
 	Attachments     string         `json:"attachments"`
 	Important       bool           `json:"important"`
+	IsPinned        int            `json:"is_pinned"`
 	ReplyMessage    *VKApiMessage  `json:"reply_message,omitempty"`
 	ForwardMessages []VKApiMessage `json:"fwd_messages,omitempty"`
 	Action          interface{}    `json:"action,omitempty"`
@@ -276,7 +277,7 @@ func GetMessageReadInfo(tx *gorm.DB, chatID string, localID uint64, fromID int64
 
 func (m *Message) ToVKApiStruct(tx *gorm.DB, depth int, currentUserID int64, requestedPeerID int64) VKApiMessage {
 	if depth <= 0 || (m.ReplyTo == nil && m.ForwardMessages == "") {
-		return m.ToVKApiStructBatch(tx, depth, currentUserID, requestedPeerID, nil, nil)
+		return m.ToVKApiStructBatch(tx, depth, currentUserID, requestedPeerID, nil, nil, nil)
 	}
 
 	cache := make(map[uint64]Message)
@@ -299,10 +300,10 @@ func (m *Message) ToVKApiStruct(tx *gorm.DB, depth int, currentUserID int64, req
 		}
 	}
 
-	return m.ToVKApiStructBatch(tx, depth, currentUserID, requestedPeerID, cache, nil)
+	return m.ToVKApiStructBatch(tx, depth, currentUserID, requestedPeerID, cache, nil, nil)
 }
 
-func (m *Message) ToVKApiStructBatch(tx *gorm.DB, depth int, currentUserID int64, requestedPeerID int64, cache map[uint64]Message, readCache map[string][]MemberReadState) VKApiMessage {
+func (m *Message) ToVKApiStructBatch(tx *gorm.DB, depth int, currentUserID int64, requestedPeerID int64, cache map[uint64]Message, readCache map[string][]MemberReadState, pinnedCache map[string]uint64) VKApiMessage {
 	vkMsg := VKApiMessage{
 		ID:          m.LocalID,
 		GlobalID:    m.ID,
@@ -322,6 +323,26 @@ func (m *Message) ToVKApiStructBatch(tx *gorm.DB, depth int, currentUserID int64
 	}
 
 	vkMsg.ReadState, vkMsg.ReadBy = GetMessageReadInfo(tx, m.ChatID, m.LocalID, m.FromID, currentUserID, readCache)
+
+	var pinnedMsgID uint64
+	if pinnedCache != nil {
+		if pid, ok := pinnedCache[m.ChatID]; ok {
+			pinnedMsgID = pid
+		} else if tx != nil && m.ChatID != "" {
+			tx.Table("conversations").Select("pinned_msg_id").Where("internal_id = ?", m.ChatID).Scan(&pinnedMsgID)
+			pinnedCache[m.ChatID] = pinnedMsgID
+		}
+	} else if m.Conversation.PinnedMsgID > 0 {
+		pinnedMsgID = m.Conversation.PinnedMsgID
+	} else if tx != nil && m.ChatID != "" {
+		tx.Table("conversations").Select("pinned_msg_id").Where("internal_id = ?", m.ChatID).Scan(&pinnedMsgID)
+	}
+
+	if pinnedMsgID > 0 && m.LocalID == pinnedMsgID {
+		vkMsg.IsPinned = 1
+	} else {
+		vkMsg.IsPinned = 0
+	}
 
 	if m.Action != "" {
 		actionObj := map[string]interface{}{
@@ -350,7 +371,7 @@ func (m *Message) ToVKApiStructBatch(tx *gorm.DB, depth int, currentUserID int64
 
 	if m.ReplyTo != nil && *m.ReplyTo > 0 && depth > 0 && cache != nil {
 		if replyMsg, ok := cache[*m.ReplyTo]; ok {
-			rm := replyMsg.ToVKApiStructBatch(tx, depth-1, currentUserID, requestedPeerID, cache, readCache)
+			rm := replyMsg.ToVKApiStructBatch(tx, depth-1, currentUserID, requestedPeerID, cache, readCache, pinnedCache)
 			vkMsg.ReplyMessage = &rm
 		}
 	}
@@ -364,7 +385,7 @@ func (m *Message) ToVKApiStructBatch(tx *gorm.DB, depth int, currentUserID int64
 			}
 
 			if fwdMsg, ok := cache[id]; ok {
-				vkMsg.ForwardMessages = append(vkMsg.ForwardMessages, fwdMsg.ToVKApiStructBatch(tx, depth-1, currentUserID, requestedPeerID, cache, readCache))
+				vkMsg.ForwardMessages = append(vkMsg.ForwardMessages, fwdMsg.ToVKApiStructBatch(tx, depth-1, currentUserID, requestedPeerID, cache, readCache, pinnedCache))
 			}
 		}
 	}

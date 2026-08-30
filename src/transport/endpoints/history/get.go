@@ -62,7 +62,6 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 		}
 	}
 
-
 	count, _ := strconv.Atoi(c.DefaultQuery("count", "20"))
 	if count > 200 {
 		count = 200
@@ -126,7 +125,7 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 
 	responseItems := make([]db_models.VKApiMessage, len(msgs))
 	for i, m := range msgs {
-		responseItems[i] = m.ToVKApiStructBatch(db.Instance, 1, currentUserID, peerID, nil, readCache)
+		responseItems[i] = m.ToVKApiStructBatch(db.Instance, 1, currentUserID, peerID, nil, readCache, nil)
 	}
 
 	var unreadCount int64

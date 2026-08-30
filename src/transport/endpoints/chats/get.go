@@ -213,7 +213,7 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 
 		var msgVK interface{} = nil
 		if hasMsg {
-			msgVK = lastMsg.ToVKApiStructBatch(db.Instance, 1, currentUserID, pID, preloadedMap, readCache)
+			msgVK = lastMsg.ToVKApiStructBatch(db.Instance, 1, currentUserID, pID, preloadedMap, readCache, nil)
 		}
 
 		var majorID int64 = 0
@@ -579,7 +579,7 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 
 		var msgVK interface{} = nil
 		if hasMsg {
-			msgVK = lastMsg.ToVKApiStructBatch(db.Instance, 1, currentUserID, pID, preloadedMap, readCache)
+			msgVK = lastMsg.ToVKApiStructBatch(db.Instance, 1, currentUserID, pID, preloadedMap, readCache, nil)
 		}
 
 		var majorID int64 = 0
