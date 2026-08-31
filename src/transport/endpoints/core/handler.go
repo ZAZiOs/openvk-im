@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"ovk-im/src/db"
 	db_models "ovk-im/src/models/db"
@@ -494,4 +495,35 @@ func (r *BaseHandler) SendChatDeleteEvent(userID int64, peerID int64) {
 	}
 	r.LPRepo.PushEvent(context.Background(), userID, "chat_delete_all", event)
 	r.Broadcaster.Notify(userID)
+}
+
+func TruncateWords(text string, length int) string {
+	if length <= 0 {
+		return text
+	}
+	runes := []rune(text)
+	if len(runes) <= length {
+		return text
+	}
+
+	nextRune := runes[length]
+	if unicode.IsSpace(nextRune) {
+		trimmed := strings.TrimRightFunc(string(runes[:length]), unicode.IsSpace)
+		return trimmed + "…"
+	}
+
+	lastSpaceIdx := -1
+	for i := length - 1; i >= 0; i-- {
+		if unicode.IsSpace(runes[i]) {
+			lastSpaceIdx = i
+			break
+		}
+	}
+
+	if lastSpaceIdx > 0 {
+		trimmed := strings.TrimRightFunc(string(runes[:lastSpaceIdx]), unicode.IsSpace)
+		return trimmed + "…"
+	}
+
+	return string(runes[:length]) + "…"
 }
