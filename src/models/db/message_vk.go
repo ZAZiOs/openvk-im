@@ -299,16 +299,30 @@ func (m *Message) ToVKApiStructBatchLegacy(tx *gorm.DB, depth int, currentUserID
 		}
 	}
 
+	isDeleted := m.DeletedAt != nil
+	deletedFlag := 0
+	if isDeleted {
+		deletedFlag = 1
+	}
+
+	body := string(m.Text)
+	attachments := string(m.Attachments)
+	if isDeleted {
+		body = ""
+		attachments = ""
+		hasEmoji = 0
+	}
+
 	vkMsg := VKApiMessageLegacy{
 		ID:          m.ID,
 		Date:        m.CreatedAt.Unix(),
 		UserID:      userID,
 		FromID:      m.FromID,
-		Body:        string(m.Text),
-		Attachments: string(m.Attachments),
+		Body:        body,
+		Attachments: attachments,
 		Important:   m.Important,
 		Emoji:       hasEmoji,
-		Deleted:     0,
+		Deleted:     deletedFlag,
 	}
 
 	if m.FromID == currentUserID {
@@ -327,13 +341,13 @@ func (m *Message) ToVKApiStructBatchLegacy(tx *gorm.DB, depth int, currentUserID
 		}
 	}
 
-	if m.Action != "" {
+	if !isDeleted && m.Action != "" {
 		vkMsg.Action = m.Action
 		vkMsg.ActionMid = m.ActionMid
 		vkMsg.ActionText = m.ActionText
 	}
 
-	if m.ForwardMessages != "" && depth > 0 && cache != nil {
+	if !isDeleted && m.ForwardMessages != "" && depth > 0 && cache != nil {
 		ids := strings.Split(m.ForwardMessages, ",")
 		for _, idStr := range ids {
 			id, err := strconv.ParseUint(strings.TrimSpace(idStr), 10, 64)
