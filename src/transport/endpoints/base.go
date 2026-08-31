@@ -51,7 +51,16 @@ func (r *Router) AuthMiddleware() gin.HandlerFunc {
 	}
 }
 
+func (r *Router) VersionMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		apiV := core.ExtractApiV(c)
+		c.Set("apiV", apiV)
+		c.Next()
+	}
+}
+
 func (r *Router) Register(group *gin.RouterGroup) {
+	group.Use(r.VersionMiddleware())
 	protected := group.Group("/")
 	protected.Use(r.AuthMiddleware())
 

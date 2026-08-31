@@ -38,6 +38,23 @@ type RequestParam struct {
 	Value string `json:"value"`
 }
 
+func GetApiV(c *gin.Context) db_models.ApiV {
+	if val, exists := c.Get("apiV"); exists {
+		if ver, ok := val.(db_models.ApiV); ok {
+			return ver
+		}
+	}
+	return ExtractApiV(c)
+}
+
+func ExtractApiV(c *gin.Context) db_models.ApiV {
+	vStr := c.Query("v")
+	if vStr == "" {
+		vStr = c.PostForm("v")
+	}
+	return db_models.ParseApiV(vStr)
+}
+
 func (h *BaseHandler) Reject(c *gin.Context, errorCode int, errorMsg string) {
 	params := make([]RequestParam, 0)
 	for k, v := range c.Request.URL.Query() {

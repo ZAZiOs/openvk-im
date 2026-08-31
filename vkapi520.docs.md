@@ -106,7 +106,7 @@ Returns a list of the current user's incoming or outgoing private messages.
 
 #### Result
 
-Returns a list of **Message** objects:
+Returns a list of [**Message objects**](#message-object):
 ```json
 {
   "response": {
@@ -133,7 +133,7 @@ Returns a list of the current user's conversations (last message of each dialog)
 
 #### Result
 
-Returns a list of **Message** objects representing the last message of each conversation.
+Returns a list of [**Message objects**](#message-object) representing the last message of each conversation.
 
 ---
 
@@ -150,7 +150,7 @@ Returns messages by their IDs.
 
 #### Result
 
-Returns a list of **Message** objects.
+Returns a list of [**Message objects**](#message-object).
 
 ---
 
@@ -169,7 +169,7 @@ Returns a list of the current user's private messages that match search criteria
 
 #### Result
 
-Returns a list of **Message** objects.
+Returns a list of [**Message objects**](#message-object).
 
 ---
 
@@ -190,7 +190,7 @@ Returns message history for the specified user or group chat.
 
 #### Result
 
-Returns a list of **Message** objects.
+Returns a list of [**Message objects**](#message-object).
 
 ---
 
@@ -370,7 +370,7 @@ Returns information about a chat.
 
 #### Result
 
-Returns a list of **Chat** objects. If `fields` is set, `users` contains user objects with an extra `invited_by` field.
+Returns a list of [**Chat objects**](#chat-object). If `fields` is set, `users` contains user objects with an extra `invited_by` field.
 
 ---
 
