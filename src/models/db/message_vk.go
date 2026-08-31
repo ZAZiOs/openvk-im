@@ -45,8 +45,8 @@ type VKApiMessageLegacy struct {
 	Attachments     string               `json:"attachments"`
 	ForwardMessages []VKApiMessageLegacy `json:"fwd_messages,omitempty"`
 	Important       bool                 `json:"important,omitempty"`
-	Deleted         int                  `json:"deleted,omitempty"`
-	Emoji           int                  `json:"emoji,omitempty"`
+	Deleted         int                  `json:"deleted"`
+	Emoji           int                  `json:"emoji"`
 	ChatID          int64                `json:"chat_id,omitempty"`
 	ChatActive      []int64              `json:"chat_active,omitempty"`
 	UsersCount      int                  `json:"users_count,omitempty"`
@@ -291,6 +291,14 @@ func (m *Message) ToVKApiStructBatchLegacy(tx *gorm.DB, depth int, currentUserID
 		}
 	}
 
+	hasEmoji := 0
+	for _, r := range string(m.Text) {
+		if r > 0x2000 {
+			hasEmoji = 1
+			break
+		}
+	}
+
 	vkMsg := VKApiMessageLegacy{
 		ID:          m.ID,
 		Date:        m.CreatedAt.Unix(),
@@ -299,6 +307,8 @@ func (m *Message) ToVKApiStructBatchLegacy(tx *gorm.DB, depth int, currentUserID
 		Body:        string(m.Text),
 		Attachments: string(m.Attachments),
 		Important:   m.Important,
+		Emoji:       hasEmoji,
+		Deleted:     0,
 	}
 
 	if m.FromID == currentUserID {
