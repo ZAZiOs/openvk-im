@@ -105,7 +105,6 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 				if err := subQ.Select("local_id").Order("local_id DESC").Limit(1).Offset(absOffset-1).Scan(&minID).Error; err == nil && minID > 0 {
 					query = query.Where("local_id >= ?", minID)
 				}
-				query = query.Where("local_id <= ?", startLocalID)
 			} else {
 				var maxID uint64
 				subQ := db.Instance.Model(&db_models.Message{}).Where("chat_id = ? AND local_id >= ?", chatID, startLocalID)
@@ -113,7 +112,6 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 				if err := subQ.Select("local_id").Order("local_id ASC").Limit(1).Offset(absOffset-1).Scan(&maxID).Error; err == nil && maxID > 0 {
 					query = query.Where("local_id <= ?", maxID)
 				}
-				query = query.Where("local_id >= ?", startLocalID)
 			}
 
 			offset = 0

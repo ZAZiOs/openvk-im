@@ -196,12 +196,14 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 			}
 		}
 
+		finalAttach := core.BuildFinalAttachments(attachment, message)
+
 		newMessage := db_models.Message{
 			ChatID:          internalChatID,
 			LocalID:         localID,
 			FromID:          currentUserID,
 			Text:            db_models.EncryptedJSON(message),
-			Attachments:     db_models.EncryptedJSON(attachment),
+			Attachments:     db_models.EncryptedJSON(finalAttach),
 			ReplyTo:         &replyTo,
 			RandomID:        randomID,
 			ForwardMessages: forwardMessagesRaw,

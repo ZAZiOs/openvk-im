@@ -76,7 +76,11 @@ func Edit(c *gin.Context, r *core.BaseHandler) {
 			return
 		}
 		finalAttach = newAttachment
-		updates["attachments"] = db_models.EncryptedJSON(newAttachment)
+	}
+
+	if textExists || attachExists {
+		computedAttach := core.BuildFinalAttachments(finalAttach, finalText)
+		updates["attachments"] = db_models.EncryptedJSON(computedAttach)
 	}
 
 	if len(finalText) == 0 && (finalAttach == "" || finalAttach == "[]") {

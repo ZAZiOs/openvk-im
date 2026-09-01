@@ -121,6 +121,7 @@ func (r *Router) BasicHandler(c *gin.Context) {
 		"messages.restore":                    messages.Restore,
 		"messages.getById":                    messages.GetByID,
 		"messages.getByConversationMessageId": messages.GetByConversationMessageID,
+		"messages.getNearestMessageForDate":   messages.GetNearestMessageForDate,
 		"messages.getMessageViewers":          messages.GetMessageViewers,
 		"im.getMessageViewers":                messages.GetMessageViewers,
 

@@ -2,7 +2,9 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
+	urlPkg "net/url"
 	"regexp"
 	"strconv"
 	"strings"
@@ -56,6 +58,15 @@ func ExtractApiV(c *gin.Context) db_models.ApiV {
 	return db_models.ParseApiV(vStr)
 }
 
+func (b *BaseHandler) Error(c *gin.Context, httpStatus int, code int, msg string) {
+	c.JSON(httpStatus, gin.H{
+		"error": VKError{
+			ErrorCode: code,
+			ErrorMsg:  msg,
+		},
+	})
+}
+
 func (h *BaseHandler) Reject(c *gin.Context, errorCode int, errorMsg string) {
 	params := make([]RequestParam, 0)
 	for k, v := range c.Request.URL.Query() {
@@ -71,7 +82,104 @@ func (h *BaseHandler) Reject(c *gin.Context, errorCode int, errorMsg string) {
 	})
 }
 
-var reAttachment = regexp.MustCompile(`^(photo|video|audio|doc|wall|market|poll|question|gift)-?\d+_\d+(?:_[a-zA-Z0-9]+)?$`)
+var (
+	reAttachment   = regexp.MustCompile(`^(photo|video|audio|doc|wall|market|poll|question|gift)-?\d+_\d+(?:_[a-zA-Z0-9]+)?$`)
+	reMarkdownLink = regexp.MustCompile(`\[([^\]]+)\]\((https?://[^\s\)]+)\)`)
+	rePlainURL     = regexp.MustCompile(`(?:^|[\s\(\[\{<]|&gt;)(https?://[^\s<>"'\]\)]+)`)
+)
+
+type LinkAttachment struct {
+	Type string                 `json:"type"`
+	Link map[string]interface{} `json:"link"`
+}
+
+func ExtractLinksFromText(text string) []LinkAttachment {
+	if text == "" {
+		return nil
+	}
+
+	seenURLs := make(map[string]bool)
+	var links []LinkAttachment
+
+	// 1. Extract Markdown links [title](url)
+	mdMatches := reMarkdownLink.FindAllStringSubmatch(text, -1)
+	for _, m := range mdMatches {
+		if len(m) >= 3 {
+			title := strings.TrimSpace(m[1])
+			url := strings.TrimSpace(m[2])
+			if url != "" && !seenURLs[url] {
+				seenURLs[url] = true
+				links = append(links, LinkAttachment{
+					Type: "link",
+					Link: map[string]interface{}{
+						"url":         url,
+						"title":       title,
+						"description": url,
+					},
+				})
+			}
+		}
+	}
+
+	// 2. Extract plain URLs
+	plainMatches := rePlainURL.FindAllStringSubmatch(text, -1)
+	for _, m := range plainMatches {
+		if len(m) >= 2 {
+			url := strings.TrimSpace(m[1])
+			if url != "" && !seenURLs[url] {
+				seenURLs[url] = true
+				title := url
+				if u, err := urlPkg.Parse(url); err == nil && u.Host != "" {
+					title = u.Host
+				}
+				links = append(links, LinkAttachment{
+					Type: "link",
+					Link: map[string]interface{}{
+						"url":         url,
+						"title":       title,
+						"description": url,
+					},
+				})
+			}
+		}
+	}
+
+	return links
+}
+
+func BuildFinalAttachments(attachmentStr string, text string) string {
+	links := ExtractLinksFromText(text)
+	if len(links) == 0 {
+		return attachmentStr
+	}
+
+	var allItems []interface{}
+
+	if strings.TrimSpace(attachmentStr) != "" {
+		var jsonArr []interface{}
+		if err := json.Unmarshal([]byte(attachmentStr), &jsonArr); err == nil {
+			allItems = append(allItems, jsonArr...)
+		} else {
+			parts := strings.Split(attachmentStr, ",")
+			for _, p := range parts {
+				p = strings.TrimSpace(p)
+				if p != "" {
+					allItems = append(allItems, p)
+				}
+			}
+		}
+	}
+
+	for _, l := range links {
+		allItems = append(allItems, l)
+	}
+
+	bytes, err := json.Marshal(allItems)
+	if err != nil {
+		return attachmentStr
+	}
+	return string(bytes)
+}
 
 func IsValidAttachments(attachmentStr string) bool {
 	if attachmentStr == "" {

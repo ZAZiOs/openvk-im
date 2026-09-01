@@ -30,12 +30,22 @@ func generateInviteCode() string {
 
 func extractInviteCode(link string) string {
 	link = strings.TrimSpace(link)
-	if idx := strings.LastIndex(link, "/join/"); idx != -1 {
+	if idx := strings.Index(link, "join="); idx != -1 {
+		link = link[idx+len("join="):]
+	} else if idx := strings.Index(link, "invite="); idx != -1 {
+		link = link[idx+len("invite="):]
+	} else if idx := strings.LastIndex(link, "/join/"); idx != -1 {
 		link = link[idx+len("/join/"):]
 	} else if idx := strings.LastIndex(link, "/"); idx != -1 {
 		link = link[idx+1:]
 	}
+	if qIdx := strings.Index(link, "&"); qIdx != -1 {
+		link = link[:qIdx]
+	}
 	if qIdx := strings.Index(link, "?"); qIdx != -1 {
+		link = link[:qIdx]
+	}
+	if qIdx := strings.Index(link, "#"); qIdx != -1 {
 		link = link[:qIdx]
 	}
 	return strings.TrimSpace(link)
@@ -69,12 +79,13 @@ func GetInviteLink(c *gin.Context, r *core.BaseHandler) {
 		return
 	}
 
+	if !member.IsAdmin {
+		r.Reject(c, 925, "You are not admin of this chat")
+		return
+	}
+
 	reset := c.Query("reset") == "1"
 	if reset {
-		if !member.IsAdmin {
-			r.Reject(c, 925, "You are not admin of this chat")
-			return
-		}
 		db.Instance.Model(&db_models.ChatInvite{}).
 			Where("internal_chat_id = ? AND revoked = ?", internalChatID, false).
 			Update("revoked", true)
@@ -101,7 +112,7 @@ func GetInviteLink(c *gin.Context, r *core.BaseHandler) {
 		}
 	}
 
-	link := "https://openvk.su/join/" + activeInvite.Code
+	link := activeInvite.Code
 
 	c.JSON(http.StatusOK, gin.H{
 		"response": gin.H{

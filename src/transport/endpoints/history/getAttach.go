@@ -1,6 +1,7 @@
 package history
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -68,7 +69,6 @@ func GetHistoryAttachments(c *gin.Context, r *core.BaseHandler) {
 		}
 	}
 
-
 	mediaType := strings.ToLower(c.DefaultQuery("media_type", "photo"))
 	count, _ := strconv.Atoi(c.DefaultQuery("count", "30"))
 	if count > 200 {
@@ -81,7 +81,7 @@ func GetHistoryAttachments(c *gin.Context, r *core.BaseHandler) {
 	offset, _ := strconv.Atoi(startFrom)
 
 	var msgs []db_models.Message
-	query := db.Instance.Where("chat_id = ? AND attachments != '[]' AND attachments IS NOT NULL", chatID)
+	query := db.Instance.Where("chat_id = ? AND attachments != '' AND attachments != '[]' AND attachments IS NOT NULL", chatID)
 	query = db_models.BuildVisibilityFilter(query, chatID, currentUserID)
 
 	order := "local_id DESC"
@@ -106,13 +106,55 @@ func GetHistoryAttachments(c *gin.Context, r *core.BaseHandler) {
 
 	for _, m := range msgs {
 		messagesProcessed++
-		var attachments []map[string]interface{}
-		if err := m.Attachments.Unmarshal(&attachments); err != nil {
+		attachStr := strings.TrimSpace(string(m.Attachments))
+		if attachStr == "" || attachStr == "[]" || attachStr == "null" {
 			continue
 		}
 
-		for _, att := range attachments {
-			attType, _ := att["type"].(string)
+		var rawAttachments []interface{}
+
+		var jsonArray []interface{}
+		if err := json.Unmarshal([]byte(attachStr), &jsonArray); err == nil {
+			rawAttachments = jsonArray
+		} else {
+			parts := strings.Split(attachStr, ",")
+			for _, p := range parts {
+				p = strings.TrimSpace(p)
+				if p != "" {
+					rawAttachments = append(rawAttachments, p)
+				}
+			}
+		}
+
+		for _, item := range rawAttachments {
+			var attType string
+			var attData interface{}
+
+			switch val := item.(type) {
+			case string:
+				attStr := val
+				typeEnd := 0
+				for j, char := range attStr {
+					if (char >= '0' && char <= '9') || char == '-' {
+						typeEnd = j
+						break
+					}
+				}
+				if typeEnd > 0 {
+					attType = strings.ToLower(attStr[:typeEnd])
+				} else {
+					attType = strings.ToLower(attStr)
+				}
+				attData = attStr
+			case map[string]interface{}:
+				if t, ok := val["type"].(string); ok {
+					attType = strings.ToLower(t)
+				}
+				attData = val
+			default:
+				continue
+			}
+
 			matches := attType == mediaType
 			if !matches {
 				if mediaType == "link" && (attType == "share" || attType == "link") {
@@ -132,7 +174,7 @@ func GetHistoryAttachments(c *gin.Context, r *core.BaseHandler) {
 
 				historyItems = append(historyItems, db_models.VKApiHistoryAttachment{
 					MessageID:  msgID,
-					Attachment: att,
+					Attachment: attData,
 				})
 
 				if m.FromID > 0 {
