@@ -403,6 +403,7 @@ func (e UpdateMessageEvent) ToSlice(cfg LPConfig) interface{} {
 type ReadIncomeBeforeEvent struct {
 	PeerID  int64
 	LocalID uint64
+	Count   int
 }
 
 func (e ReadIncomeBeforeEvent) ToSlice(cfg LPConfig) interface{} {
@@ -412,7 +413,11 @@ func (e ReadIncomeBeforeEvent) ToSlice(cfg LPConfig) interface{} {
 			"code":     6,
 			"peer_id":  e.PeerID,
 			"local_id": e.LocalID,
+			"count":    e.Count,
 		}
+	}
+	if cfg.Version >= 3 {
+		return []interface{}{6, e.PeerID, e.LocalID, e.Count}
 	}
 	return []interface{}{6, e.PeerID, e.LocalID}
 }
@@ -421,6 +426,7 @@ func (e ReadIncomeBeforeEvent) ToSlice(cfg LPConfig) interface{} {
 type ReadOutcomeBeforeEvent struct {
 	PeerID  int64
 	LocalID uint64
+	Count   int
 }
 
 func (e ReadOutcomeBeforeEvent) ToSlice(cfg LPConfig) interface{} {
@@ -430,7 +436,11 @@ func (e ReadOutcomeBeforeEvent) ToSlice(cfg LPConfig) interface{} {
 			"code":     7,
 			"peer_id":  e.PeerID,
 			"local_id": e.LocalID,
+			"count":    e.Count,
 		}
+	}
+	if cfg.Version >= 3 {
+		return []interface{}{7, e.PeerID, e.LocalID, e.Count}
 	}
 	return []interface{}{7, e.PeerID, e.LocalID}
 }

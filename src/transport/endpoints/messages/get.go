@@ -32,7 +32,7 @@ func Get(c *gin.Context, r *core.BaseHandler) {
 	query := dbx.Instance.Table("messages").
 		Joins("JOIN conversation_members ON conversation_members.internal_chat_id = messages.chat_id AND conversation_members.user_id = ? AND conversation_members.left_at IS NULL", currentUserID).
 		Where("messages.deleted_at IS NULL").
-		Where("messages.local_id > conversation_members.deleted_before_id")
+		Where("messages.local_id > COALESCE(conversation_members.deleted_before_id, 0)")
 
 	if out == 1 {
 		query = query.Where("messages.from_id = ?", currentUserID)
@@ -45,17 +45,18 @@ func Get(c *gin.Context, r *core.BaseHandler) {
 		query = query.Where("messages.created_at >= ?", since)
 	}
 
-	if (filters & 4) == 0 {
-		if (filters & 1) != 0 {
-			if out == 1 {
-				query = query.Where("messages.local_id > COALESCE((SELECT MAX(cm2.last_read_id) FROM conversation_members cm2 WHERE cm2.internal_chat_id = messages.chat_id AND cm2.user_id != messages.from_id AND cm2.left_at IS NULL), 0)")
-			} else {
-				query = query.Where("messages.local_id > conversation_members.last_read_id")
-			}
+	if (filters & 1) != 0 {
+		if out == 1 {
+			query = query.Where("messages.local_id > COALESCE((SELECT MAX(cm2.last_read_id) FROM conversation_members cm2 WHERE cm2.internal_chat_id = messages.chat_id AND cm2.user_id != messages.from_id AND cm2.left_at IS NULL), 0)")
+		} else {
+			query = query.Where("messages.local_id > conversation_members.last_read_id")
 		}
-		if (filters & 2) != 0 {
-			query = query.Where("messages.chat_id NOT LIKE 'c%'")
-		}
+	}
+	if (filters & 2) != 0 {
+		query = query.Where("messages.chat_id NOT LIKE 'c%'")
+	}
+	if (filters & 8) != 0 {
+		query = query.Where("messages.id IN (SELECT message_id FROM important_messages WHERE user_id = ?)", currentUserID)
 	}
 
 	if lastMessageID > 0 {
@@ -76,9 +77,22 @@ func Get(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	chatIDsToFetchMembers := make([]string, 0)
-	for _, m := range dbMessages {
+	msgIDs := make([]uint64, len(dbMessages))
+	for i, m := range dbMessages {
+		msgIDs[i] = m.ID
 		if strings.HasPrefix(m.ChatID, "c") {
 			chatIDsToFetchMembers = append(chatIDsToFetchMembers, m.ChatID)
+		}
+	}
+
+	importantMap := make(map[uint64]bool)
+	if len(msgIDs) > 0 {
+		var importantIDs []uint64
+		dbx.Instance.Table("important_messages").
+			Where("user_id = ? AND message_id IN ?", currentUserID, msgIDs).
+			Pluck("message_id", &importantIDs)
+		for _, id := range importantIDs {
+			importantMap[id] = true
 		}
 	}
 
@@ -112,6 +126,9 @@ func Get(c *gin.Context, r *core.BaseHandler) {
 		vkMsg := m.ToVKApiStructLegacy(dbx.Instance, 5, currentUserID, mPeerID)
 		if previewLength > 0 {
 			vkMsg.Body = core.TruncateWords(vkMsg.Body, previewLength)
+		}
+		if importantMap[m.ID] {
+			vkMsg.Important = true
 		}
 
 		if strings.HasPrefix(m.ChatID, "c") {
@@ -211,6 +228,7 @@ func Get(c *gin.Context, r *core.BaseHandler) {
 func GetByID(c *gin.Context, r *core.BaseHandler) {
 	val, _ := c.Get("userID")
 	currentUserID := val.(int64)
+	apiV := core.GetApiV(c)
 
 	idsStr := c.Query("message_ids")
 	if idsStr == "" {
@@ -231,6 +249,8 @@ func GetByID(c *gin.Context, r *core.BaseHandler) {
 		return
 	}
 
+	previewLength, _ := strconv.Atoi(c.DefaultQuery("preview_length", "0"))
+
 	var dbMessages []db_models.Message
 	var query *gorm.DB
 	if currentUserID == 0 {
@@ -240,32 +260,161 @@ func GetByID(c *gin.Context, r *core.BaseHandler) {
 			ids, currentUserID)
 	}
 	query = db_models.BuildVisibilityFilter(query, "", currentUserID)
-	err := query.Find(&dbMessages).Error
+	err := query.Preload("Conversation").Find(&dbMessages).Error
 
 	if err != nil {
 		r.Reject(c, 10, "Internal server error")
 		return
 	}
 
-	items := make([]db_models.VKApiMessage, 0)
+	var extraMsgIDs []uint64
+	var chatIDsToFetchMembers []string
+	var targetChatIDs []string
+	chatIDsMap := make(map[string]bool)
+
 	for _, m := range dbMessages {
-		mPeerID := chat.DerivePeerID(m.ChatID, currentUserID)
-		items = append(items, m.ToVKApiStruct(dbx.Instance, 5, currentUserID, mPeerID))
+		if !chatIDsMap[m.ChatID] {
+			chatIDsMap[m.ChatID] = true
+			targetChatIDs = append(targetChatIDs, m.ChatID)
+		}
+		if strings.HasPrefix(m.ChatID, "c") {
+			chatIDsToFetchMembers = append(chatIDsToFetchMembers, m.ChatID)
+		}
+		if m.ForwardMessages != "" {
+			ids := strings.Split(m.ForwardMessages, ",")
+			for _, idStr := range ids {
+				if id, err := strconv.ParseUint(strings.TrimSpace(idStr), 10, 64); err == nil {
+					extraMsgIDs = append(extraMsgIDs, id)
+				}
+			}
+		}
+		if m.ReplyTo != nil && *m.ReplyTo > 0 {
+			extraMsgIDs = append(extraMsgIDs, *m.ReplyTo)
+		}
+	}
+
+	preloadedMap := make(map[uint64]db_models.Message)
+	if len(extraMsgIDs) > 0 && len(targetChatIDs) > 0 {
+		var extras []db_models.Message
+		dbx.Instance.Where("chat_id IN ? AND local_id IN ?", targetChatIDs, extraMsgIDs).Find(&extras)
+		for _, e := range extras {
+			preloadedMap[e.LocalID] = e
+		}
+	}
+
+	readCache := make(map[string][]db_models.MemberReadState)
+	if len(targetChatIDs) > 0 {
+		var memberStates []struct {
+			InternalChatID string `gorm:"column:internal_chat_id"`
+			UserID         int64  `gorm:"column:user_id"`
+			LastReadID     uint64 `gorm:"column:last_read_id"`
+		}
+		dbx.Instance.Table("conversation_members").
+			Select("internal_chat_id, user_id, last_read_id").
+			Where("internal_chat_id IN ?", targetChatIDs).
+			Scan(&memberStates)
+		for _, ms := range memberStates {
+			readCache[ms.InternalChatID] = append(readCache[ms.InternalChatID], db_models.MemberReadState{
+				UserID:     ms.UserID,
+				LastReadID: ms.LastReadID,
+			})
+		}
+	}
+
+	chatMembersMap := make(map[string][]int64)
+	adminMap := make(map[string]int64)
+	if len(chatIDsToFetchMembers) > 0 {
+		type ChatMember struct {
+			InternalChatID string
+			UserID         int64
+			IsAdmin        bool
+		}
+		var members []ChatMember
+		dbx.Instance.Table("conversation_members").
+			Select("internal_chat_id, user_id, is_admin").
+			Where("internal_chat_id IN ? AND left_at IS NULL", chatIDsToFetchMembers).
+			Order("joined_at ASC").
+			Find(&members)
+
+		for _, mem := range members {
+			chatMembersMap[mem.InternalChatID] = append(chatMembersMap[mem.InternalChatID], mem.UserID)
+			if mem.IsAdmin && adminMap[mem.InternalChatID] == 0 {
+				adminMap[mem.InternalChatID] = mem.UserID
+			}
+		}
+	}
+
+	var responseItems any
+
+	if apiV.IsOlderThan(5, 80) {
+		legacyItems := make([]db_models.VKApiMessageLegacy, 0, len(dbMessages))
+		for _, m := range dbMessages {
+			mPeerID := chat.DerivePeerID(m.ChatID, currentUserID)
+			vkMsg := m.ToVKApiStructBatchLegacy(dbx.Instance, 5, currentUserID, mPeerID, preloadedMap, readCache, nil)
+			if previewLength > 0 {
+				vkMsg.Body = core.TruncateWords(vkMsg.Body, previewLength)
+			}
+			if strings.HasPrefix(m.ChatID, "c") {
+				if mems, ok := chatMembersMap[m.ChatID]; ok {
+					vkMsg.UsersCount = len(mems)
+					activeCount := 10
+					if len(mems) < activeCount {
+						activeCount = len(mems)
+					}
+					vkMsg.ChatActive = mems[:activeCount]
+				}
+				if adm, ok := adminMap[m.ChatID]; ok && vkMsg.AdminID == 0 {
+					vkMsg.AdminID = adm
+				}
+			}
+			legacyItems = append(legacyItems, vkMsg)
+		}
+		responseItems = legacyItems
+	} else {
+		modernItems := make([]db_models.VKApiMessage, 0, len(dbMessages))
+		for _, m := range dbMessages {
+			mPeerID := chat.DerivePeerID(m.ChatID, currentUserID)
+			vkMsg := m.ToVKApiStructBatch(dbx.Instance, 5, currentUserID, mPeerID, preloadedMap, readCache, nil)
+			if previewLength > 0 {
+				vkMsg.Text = core.TruncateWords(vkMsg.Text, previewLength)
+			}
+			modernItems = append(modernItems, vkMsg)
+		}
+		responseItems = modernItems
 	}
 
 	response := gin.H{
-		"count": len(items),
-		"items": items,
+		"count": len(dbMessages),
+		"items": responseItems,
 	}
 
 	if c.Query("extended") == "1" {
 		var userIDs []int64
 		var groupIDs []int64
+		var chatIDs []int64
 
-		core.CollectAllEntityIDs(items, &userIDs, &groupIDs)
+		if apiV.IsOlderThan(5, 80) {
+			if legacyList, ok := responseItems.([]db_models.VKApiMessageLegacy); ok {
+				core.CollectAllEntityIDsLegacy(legacyList, &userIDs, &groupIDs, &chatIDs)
+			}
+			for _, mems := range chatMembersMap {
+				for _, memID := range mems {
+					if memID > 0 {
+						userIDs = append(userIDs, memID)
+					}
+				}
+			}
+		} else {
+			if modernList, ok := responseItems.([]db_models.VKApiMessage); ok {
+				core.CollectAllEntityIDs(modernList, &userIDs, &groupIDs)
+			}
+		}
 
-		response["profiles"] = userIDs
-		response["groups"] = groupIDs
+		response["profiles"] = core.UniqueIDs(userIDs)
+		response["groups"] = core.UniqueIDs(groupIDs)
+		if len(chatIDs) > 0 {
+			response["chats"] = core.UniqueIDs(chatIDs)
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{

@@ -62,7 +62,7 @@ func SearchConversations(c *gin.Context, r *core.BaseHandler) {
 
 	lastMsgKeys := make(map[string]uint64)
 	for _, row := range rows {
-		if row.LastMessageID > 0 {
+		if row.LastMessageID > 0 && row.LastMessageID > row.DeletedBeforeID {
 			lastMsgKeys[row.InternalChatID] = row.LastMessageID
 		}
 	}
@@ -70,9 +70,24 @@ func SearchConversations(c *gin.Context, r *core.BaseHandler) {
 	msgMap := make(map[string]db_models.Message)
 	if len(lastMsgKeys) > 0 {
 		var lastMessages []db_models.Message
-		db.Instance.Where("(chat_id, local_id) IN ?", buildInPairs(lastMsgKeys)).Find(&lastMessages)
+		q := db.Instance.Where("(messages.chat_id, messages.local_id) IN ?", buildInPairs(lastMsgKeys))
+		q = db_models.BuildVisibilityFilter(q, "", currentUserID)
+		q.Find(&lastMessages)
 		for _, msg := range lastMessages {
 			msgMap[msg.ChatID] = msg
+		}
+	}
+
+	for _, row := range rows {
+		if row.LastMessageID > 0 && row.LastMessageID > row.DeletedBeforeID {
+			if _, ok := msgMap[row.InternalChatID]; !ok {
+				var latestVisible db_models.Message
+				vQ := db.Instance.Table("messages").Where("messages.chat_id = ?", row.InternalChatID)
+				vQ = db_models.BuildVisibilityFilter(vQ, row.InternalChatID, currentUserID)
+				if err := vQ.Order("messages.local_id DESC").First(&latestVisible).Error; err == nil && latestVisible.ID > 0 {
+					msgMap[row.InternalChatID] = latestVisible
+				}
+			}
 		}
 	}
 
@@ -95,9 +110,14 @@ func SearchConversations(c *gin.Context, r *core.BaseHandler) {
 			"out_read":        m.LastMessageID,
 		}
 
+		var msgVK interface{} = nil
+		if hasMsg {
+			msgVK = lastMsg.ToVKApiStructBatch(db.Instance, 1, currentUserID, pID, nil, nil, nil)
+		}
+
 		responseItems = append(responseItems, gin.H{
 			"conversation": convObj,
-			"last_message": lastMsg.ToVKApiStructBatch(db.Instance, 1, currentUserID, pID, nil, nil, nil),
+			"last_message": msgVK,
 		})
 	}
 

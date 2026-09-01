@@ -21,7 +21,7 @@
 ### Работа с беседами (чатами) "chats"
 * ✅ **messages.createChat** — создание новой беседы.
 * ✅ **messages.getChat** — получение информации о беседе.
-* ❌ **messages.getChatPreview** — получение данных для превью чата по ссылке. (требует реализации инвайтов)
+* ✅ **messages.getChatPreview** — получение данных для превью чата по ссылке. (требует реализации инвайтов)
 * ✅ **messages.editChat** — изменение названия беседы.
 * ✅ **messages.setChatPhoto** — установка фотографии беседы.
 * ✅ **messages.deleteChatPhoto** — удаление фотографии беседы.
@@ -37,12 +37,12 @@
 * ✅ **messages.deleteDialog** — удаление диалога (алиас).
 * ✅ **messages.markAsAnsweredConversation** — отметка беседы как «отвеченной».
 * ✅ **messages.markAsImportantConversation** — пометка беседы как важной.
-* ❌ **messages.getInviteLink** — получение ссылки для приглашения в беседу.
-* ❌ **messages.joinChatByInviteLink** — вход в чат по ссылке-приглашению.
+* ✅ **messages.getInviteLink** — получение ссылки для приглашения в беседу.
+* ✅ **messages.joinChatByInviteLink** — вход в чат по ссылке-приглашению.
 
 ### История и медиафайлы "history"
 * ✅ **messages.getHistory** — получение истории сообщений диалога.
-* ℹ️ `PHP:` **messages.getHistoryAttachments** — получение медиафайлов (материалов) диалога.
+* ✅ `PHP:` **messages.getHistoryAttachments** — получение медиафайлов (материалов) диалога.
 
 ### Статусы и активность "status"
 * ✅ `PHP:` **messages.getLastActivity** — дата последней активности пользователя.

@@ -359,6 +359,10 @@ func (m *Message) ToVKApiStructBatchLegacy(tx *gorm.DB, depth int, currentUserID
 				vkMsg.ForwardMessages = append(vkMsg.ForwardMessages, fwdMsg.ToVKApiStructBatchLegacy(tx, depth-1, currentUserID, requestedPeerID, cache, readCache, pinnedCache))
 			}
 		}
+	} else if !isDeleted && m.ReplyTo != nil && *m.ReplyTo > 0 && depth > 0 && cache != nil {
+		if replyMsg, ok := cache[*m.ReplyTo]; ok {
+			vkMsg.ForwardMessages = append(vkMsg.ForwardMessages, replyMsg.ToVKApiStructBatchLegacy(tx, depth-1, currentUserID, requestedPeerID, cache, readCache, pinnedCache))
+		}
 	}
 
 	return vkMsg

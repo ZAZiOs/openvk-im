@@ -156,9 +156,15 @@ func (r *BaseHandler) BroadcastChatSomethingChanged(ctx *gin.Context, peerID int
 func (r *BaseHandler) BroadcastMarkAsRead(ctx context.Context, chatID string, userID int64, lastReadID uint64) {
 	currentPeerID := chat.DerivePeerID(chatID, userID)
 
+	var unreadCount int64
+	db.Instance.Table("messages").
+		Where("chat_id = ? AND local_id > ? AND from_id != ?", chatID, lastReadID, userID).
+		Count(&unreadCount)
+
 	r.LPRepo.PushEvent(ctx, userID, "read_income_before", lp_models.ReadIncomeBeforeEvent{
 		PeerID:  currentPeerID,
 		LocalID: lastReadID,
+		Count:   int(unreadCount),
 	})
 	r.Broadcaster.Notify(userID)
 
@@ -192,9 +198,15 @@ func (r *BaseHandler) BroadcastMarkAsRead(ctx context.Context, chatID string, us
 		}
 
 		for _, mID := range members {
+			var outUnreadCount int64
+			db.Instance.Table("messages").
+				Where("chat_id = ? AND local_id > ? AND from_id = ?", cID, lrID, mID).
+				Count(&outUnreadCount)
+
 			r.LPRepo.PushEvent(bgCtx, mID, "read_outcome_before", lp_models.ReadOutcomeBeforeEvent{
 				PeerID:  targetPeerID,
 				LocalID: lrID,
+				Count:   int(outUnreadCount),
 			})
 			r.Broadcaster.Notify(mID)
 		}
@@ -420,6 +432,65 @@ func CollectAllEntityIDs(items []db_models.VKApiMessage, userIDs *[]int64, group
 	}
 }
 
+func CollectAllEntityIDsLegacy(items []db_models.VKApiMessageLegacy, userIDs *[]int64, groupIDs *[]int64, chatIDs *[]int64) {
+	uMap := make(map[int64]struct{})
+	gMap := make(map[int64]struct{})
+	cMap := make(map[int64]struct{})
+
+	var scan func(m db_models.VKApiMessageLegacy)
+	scan = func(m db_models.VKApiMessageLegacy) {
+		if m.UserID > 0 && m.UserID < 2000000000 {
+			uMap[m.UserID] = struct{}{}
+		} else if m.UserID < 0 {
+			gMap[-m.UserID] = struct{}{}
+		}
+
+		if m.FromID > 0 {
+			uMap[m.FromID] = struct{}{}
+		} else if m.FromID < 0 {
+			gMap[-m.FromID] = struct{}{}
+		}
+
+		if m.AdminID > 0 {
+			uMap[m.AdminID] = struct{}{}
+		}
+
+		if m.ActionMid > 0 {
+			uMap[m.ActionMid] = struct{}{}
+		}
+
+		if m.ChatID > 0 {
+			cMap[m.ChatID] = struct{}{}
+		}
+
+		for _, uid := range m.ChatActive {
+			if uid > 0 {
+				uMap[uid] = struct{}{}
+			}
+		}
+
+		for _, fwd := range m.ForwardMessages {
+			scan(fwd)
+		}
+	}
+
+	for _, itm := range items {
+		scan(itm)
+	}
+
+	for id := range uMap {
+		*userIDs = append(*userIDs, id)
+	}
+	for id := range gMap {
+		*groupIDs = append(*groupIDs, id)
+	}
+	if chatIDs != nil {
+		for id := range cMap {
+			*chatIDs = append(*chatIDs, id)
+		}
+	}
+}
+
 func (r *BaseHandler) SendChatFlagsUpdate(userID int64, peerID int64, flags uint64) {
 	event := lp_models.ChatReplaceFlagsEvent{
 		PeerID: peerID,
@@ -526,4 +597,16 @@ func TruncateWords(text string, length int) string {
 	}
 
 	return string(runes[:length]) + "…"
+}
+
+func UniqueIDs(ids []int64) []int64 {
+	m := make(map[int64]bool)
+	var res []int64
+	for _, id := range ids {
+		if !m[id] {
+			m[id] = true
+			res = append(res, id)
+		}
+	}
+	return res
 }

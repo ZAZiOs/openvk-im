@@ -2,6 +2,8 @@ package messages
 
 import (
 	"context"
+	"fmt"
+	"math/rand"
 	"net/http"
 	dbx "ovk-im/src/db"
 	db_models "ovk-im/src/models/db"
@@ -29,13 +31,13 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 	}
 	currentUserID := val.(int64)
 
-	if uID := c.Query("user_id"); uID != "" {
+	if uID := c.DefaultQuery("user_id", c.PostForm("user_id")); uID != "" {
 		id, _ := strconv.ParseInt(uID, 10, 64)
 		peerID = id
-	} else if cID := c.Query("chat_id"); cID != "" {
+	} else if cID := c.DefaultQuery("chat_id", c.PostForm("chat_id")); cID != "" {
 		id, _ := strconv.ParseInt(cID, 10, 64)
 		peerID = 2000000000 + id
-	} else if pID := c.Query("peer_id"); pID != "" {
+	} else if pID := c.DefaultQuery("peer_id", c.PostForm("peer_id")); pID != "" {
 		peerID, _ = strconv.ParseInt(pID, 10, 64)
 	}
 
@@ -49,11 +51,14 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 
 	// ------------------------------------
 
-	message := c.Query("message")
-	attachment := c.Query("attachment")
-	randomIDStr := c.Query("random_id")
-	replyToStr := c.Query("reply_to")
-	forwardMessagesRaw := c.Query("forward_messages")
+	message := c.DefaultQuery("message", c.PostForm("message"))
+	attachment := c.DefaultQuery("attachment", c.PostForm("attachment"))
+	randomIDStr := c.DefaultQuery("random_id", c.PostForm("random_id"))
+	if randomIDStr == "" {
+		randomIDStr = c.DefaultQuery("guid", c.PostForm("guid"))
+	}
+	replyToStr := c.DefaultQuery("reply_to", c.PostForm("reply_to"))
+	forwardMessagesRaw := c.DefaultQuery("forward_messages", c.PostForm("forward_messages"))
 
 	// Message, Attachment, Reply or Forward
 	if message == "" && attachment == "" && replyToStr == "" && forwardMessagesRaw == "" {
@@ -75,21 +80,24 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 		}
 	}
 
-	// RandomID
-	if randomIDStr == "" {
-		r.Reject(c, 100, "random_id is required")
-		return
+	// RandomID / Guid
+	var randomID int64
+	if randomIDStr != "" {
+		randomID, _ = strconv.ParseInt(randomIDStr, 10, 64)
+	} else {
+		randomID = rand.Int63()
 	}
-	randomID, _ := strconv.ParseInt(randomIDStr, 10, 64)
-	redisKey := "rid:" + strconv.FormatInt(currentUserID, 10) + ":" + strconv.FormatInt(peerID, 10) + randomIDStr
 
-	oldLocalID, err := r.LPRepo.Client.Get(c.Request.Context(), redisKey).Result()
-	if err == nil && oldLocalID != "" {
-		lID, _ := strconv.ParseUint(oldLocalID, 10, 64)
-		c.JSON(http.StatusOK, gin.H{
-			"response": lID,
-		})
-		return
+	if randomID != 0 {
+		redisKey := fmt.Sprintf("rid:%d:%d:%d", currentUserID, peerID, randomID)
+		oldMsgID, err := r.LPRepo.Client.Get(c.Request.Context(), redisKey).Result()
+		if err == nil && oldMsgID != "" {
+			mID, _ := strconv.ParseUint(oldMsgID, 10, 64)
+			c.JSON(http.StatusOK, gin.H{
+				"response": mID,
+			})
+			return
+		}
 	}
 
 	// ReplyTo
@@ -161,7 +169,7 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 
 	var finalLocalID uint64
 	var finalMessageID uint64
-	err = dbx.Instance.Transaction(func(tx *gorm.DB) error {
+	err := dbx.Instance.Transaction(func(tx *gorm.DB) error {
 		localID, err := chat.NextLocalID(tx, internalChatID, currentUserID)
 		if err != nil {
 			return err
@@ -245,7 +253,10 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 		return
 	}
 
-	r.LPRepo.Client.Set(c.Request.Context(), redisKey, finalLocalID, 24*time.Hour)
+	if randomID != 0 {
+		redisKey := fmt.Sprintf("rid:%d:%d:%d", currentUserID, peerID, randomID)
+		r.LPRepo.Client.Set(c.Request.Context(), redisKey, finalMessageID, 24*time.Hour)
+	}
 
 	// --- ПОДГОТОВКА LONGPOLL СОБЫТИЯ ---
 	lpAttach := lp_models.NewLPAttachments(attachment)

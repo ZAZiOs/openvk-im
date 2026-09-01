@@ -14,32 +14,10 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-/*
-messages.getLongPollHistory
-
-Метод позволяет получить историю событий LongPoll для клиента, который был оффлайн.
-Используется для синхронизации состояния, когда TS в LongPoll сервере устарел (ошибка 4)
-или когда клиент только что запустился.
-
-Параметры:
-- ts (uint64): Последний известный TS.
-- pts (uint64): (необязательно) Последний известный PTS.
-- version (int): Версия LongPoll (по умолчанию 2).
-- events_limit (int): Максимум событий в ответе (default 1000).
-- msgs_limit (int): Максимум новых сообщений в ответе (default 200).
-
-Результат:
-- history: [][]interface{} (массив событий в формате LongPoll).
-- messages: {count: int, items: []VKApiMessage} (полные объекты сообщений).
-- profiles: []int64 (ID встретившихся пользователей).
-- groups: []int64 (ID встретившихся сообществ).
-- new_pts: uint64 (актуальный PTS для последующих запросов).
-- new_ts: uint64 (актуальный TS).
-*/
-
 func GetLongPollHistory(c *gin.Context, r *core.BaseHandler) {
 	val, _ := c.Get("userID")
 	userID := val.(int64)
+	apiV := core.GetApiV(c)
 
 	ts, _ := strconv.ParseUint(c.Query("ts"), 10, 64)
 	pts, _ := strconv.ParseUint(c.Query("pts"), 10, 64)
@@ -47,7 +25,12 @@ func GetLongPollHistory(c *gin.Context, r *core.BaseHandler) {
 	msgsLimit, _ := strconv.Atoi(c.DefaultQuery("msgs_limit", "200"))
 	if msgsLimit > 1000 {
 		msgsLimit = 1000
+	} else if msgsLimit < 1 {
+		msgsLimit = 200
 	}
+
+	previewLen, _ := strconv.Atoi(c.DefaultQuery("preview_length", "0"))
+	maxMsgID, _ := strconv.ParseUint(c.DefaultQuery("max_msg_id", "0"), 10, 64)
 
 	version, _ := strconv.Atoi(c.DefaultQuery("version", "2"))
 	if v := c.Query("lp_version"); v != "" {
@@ -69,10 +52,8 @@ func GetLongPollHistory(c *gin.Context, r *core.BaseHandler) {
 		ts = currentTS
 	}
 
-	// Получаем сырые события из Redis или БД событий
 	rawEvents, newTS, err := r.LPRepo.GetUpdates(ctx, userID, ts)
 	if err != nil && err != redis_repo.ErrTsTooOld {
-		// If error is other than outdated, reject
 		r.Reject(c, 10, "Internal server error: "+err.Error())
 		return
 	}
@@ -82,53 +63,97 @@ func GetLongPollHistory(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	history := make([]interface{}, 0)
-	msgItems := make([]db_models.VKApiMessage, 0)
+	var legacyItems []db_models.VKApiMessageLegacy
+	var modernItems []db_models.VKApiMessage
 
 	for _, ev := range rawEvents {
 		if len(history) >= eventsLimit {
 			break
 		}
 
-		sliceData := ev.ToSlice(lpCfg) // Обычно используем v3
+		sliceData := ev.ToSlice(lpCfg)
 		slice, ok := sliceData.([]interface{})
 		if !ok || len(slice) == 0 {
 			continue
 		}
 
-		history = append(history, slice) // Добавляем событие в историю
+		history = append(history, slice)
 		code := slice[0].(int)
 
-		// Если это новое сообщение (код 4)
-		if code == 4 && len(msgItems) < msgsLimit {
-			localID := slice[1].(uint64)
-			peerID := slice[3].(int64)
+		// Code 4: New message
+		if code == 4 && (len(legacyItems) < msgsLimit && len(modernItems) < msgsLimit) {
+			var msgID uint64
+			switch v := slice[1].(type) {
+			case uint64:
+				msgID = v
+			case int64:
+				msgID = uint64(v)
+			case int:
+				msgID = uint64(v)
+			}
 
-			// МАГИЯ: Получаем internal_id, чтобы найти сообщение в БД
+			if maxMsgID > 0 && msgID <= maxMsgID {
+				continue
+			}
+
+			var peerID int64
+			switch v := slice[3].(type) {
+			case int64:
+				peerID = v
+			case int:
+				peerID = int64(v)
+			case uint64:
+				peerID = int64(v)
+			}
+
 			chatID := chat.GetInternalChatID(peerID, userID)
 
 			var m db_models.Message
-			q := db.Instance.Where("chat_id = ? AND local_id = ?", chatID, localID)
+			q := db.Instance.Where("id = ? OR (chat_id = ? AND local_id = ?)", msgID, chatID, msgID)
 			q = db_models.BuildVisibilityFilter(q, chatID, userID)
-			err := q.First(&m).Error
-			if err == nil {
-				msgItems = append(msgItems, m.ToVKApiStruct(db.Instance, 0, userID, peerID))
+			if err := q.First(&m).Error; err == nil {
+				if apiV.IsOlderThan(5, 80) {
+					vkMsg := m.ToVKApiStructLegacy(db.Instance, 0, userID, peerID)
+					if previewLen > 0 {
+						vkMsg.Body = core.TruncateWords(vkMsg.Body, previewLen)
+					}
+					legacyItems = append(legacyItems, vkMsg)
+				} else {
+					vkMsg := m.ToVKApiStruct(db.Instance, 0, userID, peerID)
+					if previewLen > 0 {
+						vkMsg.Text = core.TruncateWords(vkMsg.Text, previewLen)
+					}
+					modernItems = append(modernItems, vkMsg)
+				}
 			}
 		}
 	}
 
-	var userIDs, groupIDs []int64
-	core.CollectAllEntityIDs(msgItems, &userIDs, &groupIDs)
-
 	newPTS, _ := r.LPRepo.GetUserPTS(ctx, userID)
 
-	c.JSON(http.StatusOK, gin.H{
-		"response": gin.H{
-			"history":  history,
-			"messages": gin.H{"count": len(msgItems), "items": msgItems},
-			"profiles": userIDs,
-			"groups":   groupIDs,
-			"new_pts":  newPTS,
-			"new_ts":   newTS,
-		},
-	})
+	var messagesResp gin.H
+	var userIDs, groupIDs, chatIDs []int64
+
+	if apiV.IsOlderThan(5, 80) {
+		messagesResp = gin.H{"count": len(legacyItems), "items": legacyItems}
+		core.CollectAllEntityIDsLegacy(legacyItems, &userIDs, &groupIDs, &chatIDs)
+	} else {
+		messagesResp = gin.H{"count": len(modernItems), "items": modernItems}
+		core.CollectAllEntityIDs(modernItems, &userIDs, &groupIDs)
+	}
+
+	responsePayload := gin.H{
+		"history":  history,
+		"messages": messagesResp,
+		"profiles": core.UniqueIDs(userIDs),
+		"groups":   core.UniqueIDs(groupIDs),
+		"new_pts":  newPTS,
+		"new_ts":   newTS,
+	}
+
+	if len(chatIDs) > 0 {
+		responsePayload["chats"] = core.UniqueIDs(chatIDs)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"response": responsePayload})
 }

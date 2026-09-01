@@ -85,6 +85,8 @@ var writeMethods = map[string]bool{
 	"messages.markAsAnsweredConversation":  true,
 	"messages.markAsImportantConversation": true,
 	"messages.deleteConversation":          true,
+	"messages.getInviteLink":               true,
+	"messages.joinChatByInviteLink":        true,
 	"messages.setActivity":                 true,
 	"im.sendAction":                        true,
 }
@@ -125,6 +127,7 @@ func (r *Router) BasicHandler(c *gin.Context) {
 
 		"messages.createChat":                  chats.CreateChat,
 		"messages.editChat":                    chats.EditChat,
+		"messages.getChat":                     chats.GetChat,
 		"messages.setChatPhoto":                chats.SetChatPhoto,
 		"messages.deleteChatPhoto":             chats.DeleteChatPhoto,
 		"messages.addChatUser":                 chats.AddChatUser,
@@ -136,6 +139,9 @@ func (r *Router) BasicHandler(c *gin.Context) {
 		"messages.markAsAnsweredConversation":  chats.MarkAsAnsweredConversation,
 		"messages.markAsImportantConversation": chats.MarkAsImportantConversation,
 		"messages.deleteConversation":          chats.DeleteConversation,
+		"messages.getInviteLink":               chats.GetInviteLink,
+		"messages.getChatPreview":              chats.GetChatPreview,
+		"messages.joinChatByInviteLink":        chats.JoinChatByInviteLink,
 
 		"messages.setActivity": status.SetActivity,
 
@@ -153,7 +159,7 @@ func (r *Router) BasicHandler(c *gin.Context) {
 		"messages.getDialogs":    chats.GetConversations,
 		"messages.deleteDialog":  chats.DeleteConversation,
 		"messages.searchDialogs": chats.SearchConversations,
-		"messages.getChatUsers":  chats.GetConversationMembers,
+		"messages.getChatUsers":  chats.GetChatUsers,
 	}
 
 	handler, exists := methods[slug]

@@ -38,9 +38,9 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 		Select(`
             conversation_members.*, 
             COUNT(*) OVER() as total_count,
-            SUM(CASE WHEN conversation_members.last_message_id > conversation_members.last_read_id THEN 1 ELSE 0 END) OVER() as total_unread
+            SUM(CASE WHEN conversation_members.last_message_id > conversation_members.last_read_id AND conversation_members.last_message_id > COALESCE(conversation_members.deleted_before_id, 0) THEN 1 ELSE 0 END) OVER() as total_unread
         `).
-		Joins("LEFT JOIN messages ON messages.chat_id = conversation_members.internal_chat_id AND messages.local_id = conversation_members.last_message_id").
+		Joins("LEFT JOIN messages ON messages.chat_id = conversation_members.internal_chat_id AND messages.local_id = conversation_members.last_message_id AND messages.local_id > COALESCE(conversation_members.deleted_before_id, 0) AND messages.deleted_at IS NULL").
 		Where("conversation_members.user_id = ? AND conversation_members.left_at IS NULL", currentUserID)
 
 	if currentUserID == 0 {
@@ -51,13 +51,12 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 				COUNT(*) OVER() as total_count,
 				0 as total_unread
 			`).
-			Joins("LEFT JOIN messages ON messages.chat_id = conversations.internal_id AND messages.local_id = conversations.last_message_id")
+			Joins("LEFT JOIN messages ON messages.chat_id = conversations.internal_id AND messages.local_id = conversations.last_message_id AND messages.deleted_at IS NULL")
 	} else if filter == "unread" {
-		query = query.Where("conversation_members.last_message_id > conversation_members.last_read_id")
+		query = query.Where("conversation_members.last_message_id > conversation_members.last_read_id AND conversation_members.last_message_id > COALESCE(conversation_members.deleted_before_id, 0)")
 	}
 
-
-	err := query.Order("messages.created_at DESC, messages.id DESC").
+	err := query.Order("messages.created_at DESC, messages.id DESC, conversation_members.last_message_id DESC").
 		Preload("Conversation").
 		Limit(count).Offset(offset).Find(&rows).Error
 
@@ -80,10 +79,10 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 	chatIDsToFetchMembers := make([]string, 0, numRows)
 
 	for _, row := range rows {
-		if row.LastMessageID > 0 {
+		if row.LastMessageID > 0 && row.LastMessageID > row.DeletedBeforeID {
 			lastMsgKeys[row.InternalChatID] = row.LastMessageID
 		}
-		if row.LastMessageID > row.LastReadID {
+		if row.LastMessageID > row.LastReadID && row.LastMessageID > row.DeletedBeforeID {
 			unreadCheckIDs = append(unreadCheckIDs, row.InternalChatID)
 		}
 		if getPeerType(row.InternalChatID) == "chat" {
@@ -94,9 +93,24 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 	msgMap := make(map[string]db_models.Message, len(lastMsgKeys))
 	if len(lastMsgKeys) > 0 {
 		var lastMessages []db_models.Message
-		db.Instance.Where("(chat_id, local_id) IN ?", buildInPairs(lastMsgKeys)).Find(&lastMessages)
+		q := db.Instance.Where("(messages.chat_id, messages.local_id) IN ?", buildInPairs(lastMsgKeys))
+		q = db_models.BuildVisibilityFilter(q, "", currentUserID)
+		q.Find(&lastMessages)
 		for _, msg := range lastMessages {
 			msgMap[msg.ChatID] = msg
+		}
+	}
+
+	for _, row := range rows {
+		if row.LastMessageID > 0 && row.LastMessageID > row.DeletedBeforeID {
+			if _, ok := msgMap[row.InternalChatID]; !ok {
+				var latestVisible db_models.Message
+				vQ := db.Instance.Table("messages").Where("messages.chat_id = ?", row.InternalChatID)
+				vQ = db_models.BuildVisibilityFilter(vQ, row.InternalChatID, currentUserID)
+				if err := vQ.Order("messages.local_id DESC").First(&latestVisible).Error; err == nil && latestVisible.ID > 0 {
+					msgMap[row.InternalChatID] = latestVisible
+				}
+			}
 		}
 	}
 
@@ -115,7 +129,7 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 			Where("messages.chat_id IN ?", unreadCheckIDs).
 			Where("messages.from_id != ?", currentUserID).
 			Where("messages.local_id > conversation_members.last_read_id").
-			Where("messages.local_id > conversation_members.deleted_before_id").
+			Where("messages.local_id > COALESCE(conversation_members.deleted_before_id, 0)").
 			Where("messages.deleted_at IS NULL").
 			Group("messages.chat_id").Find(&results)
 
@@ -208,6 +222,9 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 	for _, row := range rows {
 		m := row.ConversationMember
 		conv := m.Conversation
+		if conv.InternalID == "" {
+			db.Instance.Where("internal_id = ?", m.InternalChatID).First(&conv)
+		}
 		pID := chat.DerivePeerID(m.InternalChatID, currentUserID)
 		lastMsg, hasMsg := msgMap[m.InternalChatID]
 
@@ -249,8 +266,12 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 			conversationObj["unread_count"] = 0
 		}
 
+		var pMsgVK interface{} = nil
 		if conv.PinnedMsgID > 0 {
-			conversationObj["current_pinned_message"] = gin.H{"id": conv.PinnedMsgID}
+			var pMsg db_models.Message
+			if err := db.Instance.Where("chat_id = ? AND local_id = ? AND deleted_at IS NULL", m.InternalChatID, conv.PinnedMsgID).First(&pMsg).Error; err == nil {
+				pMsgVK = pMsg.ToVKApiStructBatch(db.Instance, 0, currentUserID, pID, preloadedMap, readCache, nil)
+			}
 		}
 
 		if getPeerType(m.InternalChatID) == "chat" {
@@ -258,10 +279,16 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 			if membersList == nil {
 				membersList = []int64{}
 			}
-			conversationObj["chat_settings"] = gin.H{
+			chatSettingsObj := gin.H{
 				"members":  membersList,
 				"admin_id": adminMap[m.InternalChatID],
 			}
+			if pMsgVK != nil {
+				chatSettingsObj["pinned_message"] = pMsgVK
+			}
+			conversationObj["chat_settings"] = chatSettingsObj
+		} else if pMsgVK != nil {
+			conversationObj["pinned_message"] = pMsgVK
 		}
 
 		responseItems = append(responseItems, gin.H{
@@ -484,7 +511,7 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 	lastMsgKeys := make(map[string]uint64)
 	chatIDsToFetchMembers := make([]string, 0)
 	for _, row := range rows {
-		if row.LastMessageID > 0 {
+		if row.LastMessageID > 0 && row.LastMessageID > row.DeletedBeforeID {
 			lastMsgKeys[row.InternalChatID] = row.LastMessageID
 		}
 		if getPeerType(row.InternalChatID) == "chat" {
@@ -526,7 +553,9 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 
 	if len(lastMsgKeys) > 0 {
 		var lastMessages []db_models.Message
-		db.Instance.Where("(chat_id, local_id) IN ?", buildInPairs(lastMsgKeys)).Find(&lastMessages)
+		q := db.Instance.Where("(messages.chat_id, messages.local_id) IN ?", buildInPairs(lastMsgKeys))
+		q = db_models.BuildVisibilityFilter(q, "", currentUserID)
+		q.Find(&lastMessages)
 
 		for _, msg := range lastMessages {
 			msgMap[msg.ChatID] = msg
@@ -540,6 +569,20 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 					if id, err := strconv.ParseUint(strings.TrimSpace(idStr), 10, 64); err == nil {
 						extraMsgIDs = append(extraMsgIDs, id)
 					}
+				}
+			}
+		}
+	}
+
+	for _, row := range rows {
+		if row.LastMessageID > 0 && row.LastMessageID > row.DeletedBeforeID {
+			if _, ok := msgMap[row.InternalChatID]; !ok {
+				var latestVisible db_models.Message
+				vQ := db.Instance.Table("messages").Where("messages.chat_id = ?", row.InternalChatID)
+				vQ = db_models.BuildVisibilityFilter(vQ, row.InternalChatID, currentUserID)
+				if err := vQ.Order("messages.local_id DESC").First(&latestVisible).Error; err == nil && latestVisible.ID > 0 {
+					msgMap[row.InternalChatID] = latestVisible
+					convIDs = append(convIDs, row.InternalChatID)
 				}
 			}
 		}
@@ -616,8 +659,16 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 			},
 		}
 
-		if m.Conversation.ID != 0 && m.Conversation.PinnedMsgID > 0 {
-			convObj["current_pinned_message"] = gin.H{"id": m.Conversation.PinnedMsgID}
+		conv := m.Conversation
+		if conv.InternalID == "" {
+			db.Instance.Where("internal_id = ?", m.InternalChatID).First(&conv)
+		}
+		var pMsgVK interface{} = nil
+		if conv.PinnedMsgID > 0 {
+			var pMsg db_models.Message
+			if err := db.Instance.Where("chat_id = ? AND local_id = ? AND deleted_at IS NULL", m.InternalChatID, conv.PinnedMsgID).First(&pMsg).Error; err == nil {
+				pMsgVK = pMsg.ToVKApiStructBatch(db.Instance, 0, currentUserID, pID, preloadedMap, readCache, nil)
+			}
 		}
 
 		if getPeerType(m.InternalChatID) == "chat" {
@@ -625,10 +676,16 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 			if membersList == nil {
 				membersList = []int64{}
 			}
-			convObj["chat_settings"] = gin.H{
+			chatSettingsObj := gin.H{
 				"members":  membersList,
 				"admin_id": adminMap[m.InternalChatID],
 			}
+			if pMsgVK != nil {
+				chatSettingsObj["pinned_message"] = pMsgVK
+			}
+			convObj["chat_settings"] = chatSettingsObj
+		} else if pMsgVK != nil {
+			convObj["pinned_message"] = pMsgVK
 		}
 
 		responseItems = append(responseItems, gin.H{
@@ -707,4 +764,179 @@ func addID(id int64, u *[]int64, g *[]int64, c *[]int64) {
 	} else if id < 0 {
 		*g = append(*g, -id)
 	}
+}
+
+func GetChat(c *gin.Context, r *core.BaseHandler) {
+	val, _ := c.Get("userID")
+	currentUserID := val.(int64)
+
+	chatIDStr := c.DefaultQuery("chat_id", c.PostForm("chat_id"))
+	chatIDsStr := c.DefaultQuery("chat_ids", c.PostForm("chat_ids"))
+
+	if chatIDStr == "" && chatIDsStr == "" {
+		if pID := c.DefaultQuery("peer_id", c.PostForm("peer_id")); pID != "" {
+			if id, err := strconv.ParseInt(pID, 10, 64); err == nil && id > 2000000000 {
+				chatIDStr = strconv.FormatInt(id-2000000000, 10)
+			}
+		}
+	}
+
+	if chatIDStr == "" && chatIDsStr == "" {
+		r.Reject(c, 100, "One of the parameters is missing: chat_id or chat_ids")
+		return
+	}
+
+	var rawChatIDs []int64
+	singleMode := false
+
+	if chatIDsStr != "" {
+		for _, s := range strings.Split(chatIDsStr, ",") {
+			if id, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64); err == nil && id > 0 {
+				if id > 2000000000 {
+					id -= 2000000000
+				}
+				rawChatIDs = append(rawChatIDs, id)
+			}
+		}
+	} else if chatIDStr != "" {
+		if id, err := strconv.ParseInt(strings.TrimSpace(chatIDStr), 10, 64); err == nil && id > 0 {
+			if id > 2000000000 {
+				id -= 2000000000
+			}
+			rawChatIDs = append(rawChatIDs, id)
+			singleMode = true
+		}
+	}
+
+	rawChatIDs = core.UniqueIDs(rawChatIDs)
+	if len(rawChatIDs) == 0 {
+		r.Reject(c, 100, "Invalid chat_id or chat_ids")
+		return
+	}
+
+	resultChats := make([]db_models.VKApiChat, 0, len(rawChatIDs))
+
+	for _, localChatID := range rawChatIDs {
+		internalChatID := "c" + strconv.FormatInt(localChatID, 10)
+
+		var conv db_models.Conversation
+		_ = db.Instance.Where("internal_id = ?", internalChatID).First(&conv).Error
+
+		var members []db_models.ConversationMember
+		db.Instance.Where("internal_chat_id = ? AND left_at IS NULL", internalChatID).Order("joined_at ASC").Find(&members)
+
+		var isMember bool
+		var leftState int
+		var kickedState int
+		var adminID int64
+
+		if conv.OwnerID != nil && *conv.OwnerID > 0 {
+			adminID = *conv.OwnerID
+		}
+
+		userIDs := make([]int64, 0, len(members))
+		for _, m := range members {
+			userIDs = append(userIDs, m.UserID)
+			if m.UserID == currentUserID {
+				isMember = true
+			}
+			if m.IsAdmin && adminID == 0 {
+				adminID = m.UserID
+			}
+		}
+
+		if !isMember && currentUserID != 0 {
+			var check db_models.ConversationMember
+			if err := db.Instance.Where("internal_chat_id = ? AND user_id = ?", internalChatID, currentUserID).First(&check).Error; err == nil {
+				if check.LeftAt != nil {
+					leftState = 1
+				}
+			}
+		}
+
+		title := conv.Title
+		if title == "" {
+			title = fmt.Sprintf("Chat %d", localChatID)
+		}
+
+		chatObj := db_models.VKApiChat{
+			ID:           localChatID,
+			Type:         "chat",
+			Title:        title,
+			AdminID:      adminID,
+			Users:        userIDs,
+			MembersCount: len(userIDs),
+			PushSettings: &db_models.VKPushSettings{
+				DisabledUntil: 0,
+			},
+		}
+
+		if leftState > 0 {
+			chatObj.Left = 1
+		}
+		if kickedState > 0 {
+			chatObj.Kicked = 1
+		}
+
+		resultChats = append(resultChats, chatObj)
+	}
+
+	if singleMode {
+		if len(resultChats) == 0 {
+			r.Reject(c, 917, "You don't have access to this chat")
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{"response": resultChats[0]})
+	} else {
+		c.JSON(http.StatusOK, gin.H{"response": resultChats})
+	}
+}
+
+func GetChatUsers(c *gin.Context, r *core.BaseHandler) {
+	val, _ := c.Get("userID")
+	currentUserID := val.(int64)
+
+	chatIDStr := c.DefaultQuery("chat_id", c.PostForm("chat_id"))
+	if chatIDStr == "" {
+		if pID := c.DefaultQuery("peer_id", c.PostForm("peer_id")); pID != "" {
+			if id, err := strconv.ParseInt(pID, 10, 64); err == nil && id > 2000000000 {
+				chatIDStr = strconv.FormatInt(id-2000000000, 10)
+			}
+		}
+	}
+
+	if chatIDStr == "" {
+		r.Reject(c, 100, "One of the parameters is missing: chat_id")
+		return
+	}
+
+	chatID, err := strconv.ParseInt(chatIDStr, 10, 64)
+	if err != nil || chatID <= 0 {
+		r.Reject(c, 100, "Invalid chat_id")
+		return
+	}
+	if chatID > 2000000000 {
+		chatID -= 2000000000
+	}
+
+	internalChatID := "c" + strconv.FormatInt(chatID, 10)
+
+	if currentUserID != 0 {
+		var check db_models.ConversationMember
+		err := db.Instance.Where("internal_chat_id = ? AND user_id = ? AND left_at IS NULL", internalChatID, currentUserID).First(&check).Error
+		if err != nil {
+			r.Reject(c, 917, "You don't have access to this chat")
+			return
+		}
+	}
+
+	var members []db_models.ConversationMember
+	db.Instance.Where("internal_chat_id = ? AND left_at IS NULL", internalChatID).Order("joined_at ASC").Find(&members)
+
+	userIDs := make([]int64, 0, len(members))
+	for _, m := range members {
+		userIDs = append(userIDs, m.UserID)
+	}
+
+	c.JSON(http.StatusOK, gin.H{"response": userIDs})
 }

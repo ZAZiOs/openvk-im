@@ -21,41 +21,62 @@ func Delete(c *gin.Context, r *core.BaseHandler) {
 		return
 	}
 	currentUserID := val.(int64)
+	apiV := core.GetApiV(c)
 
-	peerID, _ := strconv.ParseInt(c.Query("peer_id"), 10, 64)
-	idsStr := c.Query("message_ids")
-	deleteAll := c.Query("delete_for_all") == "1"
+	peerID, _ := strconv.ParseInt(c.DefaultQuery("peer_id", c.PostForm("peer_id")), 10, 64)
+	uIDParam, _ := strconv.ParseInt(c.DefaultQuery("user_id", c.PostForm("user_id")), 10, 64)
+	if peerID == 0 && uIDParam != 0 {
+		peerID = uIDParam
+	}
+	if peerID == 0 {
+		if chatIDParam := c.DefaultQuery("chat_id", c.PostForm("chat_id")); chatIDParam != "" {
+			if id, err := strconv.ParseInt(chatIDParam, 10, 64); err == nil {
+				peerID = 2000000000 + id
+			}
+		}
+	}
 
-	if peerID == 0 || idsStr == "" {
-		r.Reject(c, 100, "One of the parameters is missing: peer_id or message_ids")
+	idsStr := c.DefaultQuery("message_ids", c.PostForm("message_ids"))
+	deleteAll := c.DefaultQuery("delete_for_all", c.PostForm("delete_for_all")) == "1"
+	if apiV.IsOlderThan(5, 80) {
+		// In VK API 5.20 delete_for_all was not supported
+		deleteAll = false
+	}
+
+	if idsStr == "" {
+		r.Reject(c, 100, "One of the parameters is missing: message_ids")
 		return
 	}
 
 	idStrings := strings.Split(idsStr, ",")
-	var localIDs []uint64
+	var requestedIDs []uint64
 	for _, s := range idStrings {
 		if id, err := strconv.ParseUint(strings.TrimSpace(s), 10, 64); err == nil {
-			localIDs = append(localIDs, id)
+			requestedIDs = append(requestedIDs, id)
 		}
 	}
 
-	if len(localIDs) == 0 {
+	if len(requestedIDs) == 0 {
 		r.Reject(c, 100, "Invalid message_ids format")
 		return
 	}
 
 	var msgs []db_models.Message
+	var query *gorm.DB
 	if peerID != 0 {
 		chatID := chat.GetInternalChatID(peerID, currentUserID)
-		if err := dbx.Instance.Where("chat_id = ? AND (local_id IN ? OR id IN ?)", chatID, localIDs, localIDs).Find(&msgs).Error; err != nil || len(msgs) == 0 {
-			r.Reject(c, 946, "Messages not found")
-			return
-		}
+		query = dbx.Instance.Where("chat_id = ? AND (local_id IN ? OR id IN ?)", chatID, requestedIDs, requestedIDs)
+	} else if currentUserID == 0 {
+		query = dbx.Instance.Where("id IN ?", requestedIDs)
 	} else {
-		if err := dbx.Instance.Where("id IN ?", localIDs).Find(&msgs).Error; err != nil || len(msgs) == 0 {
-			r.Reject(c, 946, "Messages not found")
-			return
-		}
+		query = dbx.Instance.Where("id IN ? AND chat_id IN (SELECT internal_chat_id FROM conversation_members WHERE user_id = ? AND left_at IS NULL)",
+			requestedIDs, currentUserID)
+	}
+	query = db_models.BuildVisibilityFilter(query, "", currentUserID)
+	err := query.Find(&msgs).Error
+	if err != nil {
+		r.Reject(c, 10, "Internal server error")
+		return
 	}
 
 	if deleteAll {
@@ -72,8 +93,11 @@ func Delete(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	results := make(map[string]int)
+	for _, id := range requestedIDs {
+		results[strconv.FormatUint(id, 10)] = 0
+	}
 
-	err := dbx.Instance.Transaction(func(tx *gorm.DB) error {
+	err = dbx.Instance.Transaction(func(tx *gorm.DB) error {
 		now := time.Now()
 		affectedChats := make(map[string]bool)
 		for _, msg := range msgs {

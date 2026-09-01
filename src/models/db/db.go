@@ -54,15 +54,14 @@ type ConversationMember struct {
 }
 
 type ChatInvite struct {
-	Code           string `gorm:"primaryKey;type:varchar(191)" json:"code"`
-	InternalChatID int64  `gorm:"index:idx_member_lookup;type:varchar(100)"`
-	CreatorID      int64  `json:"creator_id"`
-
-	UsageLimit int64 `json:"usage_limit"` // 0 - unlimited
-	UsageCount int64 `json:"usage_count"`
-
-	ExpiresAt *time.Time `gorm:"precision:3" json:"expires_at"`
-	CreatedAt time.Time  `gorm:"precision:3" json:"created_at"`
+	Code           string     `gorm:"primaryKey;type:varchar(191)" json:"code"`
+	InternalChatID string     `gorm:"index;type:varchar(100)" json:"internal_chat_id"`
+	CreatorID      int64      `gorm:"index" json:"creator_id"`
+	UsageLimit     int64      `json:"usage_limit"` // 0 - unlimited
+	UsageCount     int64      `json:"usage_count"`
+	Revoked        bool       `gorm:"default:false;index" json:"revoked"`
+	ExpiresAt      *time.Time `gorm:"precision:3" json:"expires_at"`
+	CreatedAt      time.Time  `gorm:"precision:3" json:"created_at"`
 
 	Conversation Conversation `gorm:"foreignKey:InternalChatID;references:InternalID" json:"-"`
 }

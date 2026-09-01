@@ -69,10 +69,12 @@ func GetHistoryAttachments(c *gin.Context, r *core.BaseHandler) {
 	}
 
 
-	mediaType := c.DefaultQuery("media_type", "photo")
+	mediaType := strings.ToLower(c.DefaultQuery("media_type", "photo"))
 	count, _ := strconv.Atoi(c.DefaultQuery("count", "30"))
 	if count > 200 {
 		count = 200
+	} else if count < 1 {
+		count = 30
 	}
 
 	startFrom := c.Query("start_from")
@@ -99,6 +101,7 @@ func GetHistoryAttachments(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	var historyItems []db_models.VKApiHistoryAttachment
+	var userIDs, groupIDs []int64
 	messagesProcessed := 0
 
 	for _, m := range msgs {
@@ -109,11 +112,34 @@ func GetHistoryAttachments(c *gin.Context, r *core.BaseHandler) {
 		}
 
 		for _, att := range attachments {
-			if att["type"] == mediaType {
+			attType, _ := att["type"].(string)
+			matches := attType == mediaType
+			if !matches {
+				if mediaType == "link" && (attType == "share" || attType == "link") {
+					matches = true
+				} else if mediaType == "doc" && (attType == "doc" || attType == "graffiti") {
+					matches = true
+				} else if mediaType == "audio_message" && (attType == "audio_message" || attType == "audiomessage") {
+					matches = true
+				}
+			}
+
+			if matches {
+				msgID := m.ID
+				if msgID == 0 {
+					msgID = m.LocalID
+				}
+
 				historyItems = append(historyItems, db_models.VKApiHistoryAttachment{
-					MessageID:  m.LocalID,
+					MessageID:  msgID,
 					Attachment: att,
 				})
+
+				if m.FromID > 0 {
+					userIDs = append(userIDs, m.FromID)
+				} else if m.FromID < 0 {
+					groupIDs = append(groupIDs, -m.FromID)
+				}
 			}
 		}
 
@@ -130,10 +156,17 @@ func GetHistoryAttachments(c *gin.Context, r *core.BaseHandler) {
 		nextFrom = ""
 	}
 
+	response := gin.H{
+		"items":     historyItems,
+		"next_from": nextFrom,
+	}
+
+	if c.Query("extended") == "1" || c.Query("fields") != "" {
+		response["profiles"] = core.UniqueIDs(userIDs)
+		response["groups"] = core.UniqueIDs(groupIDs)
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"response": gin.H{
-			"items":     historyItems,
-			"next_from": nextFrom,
-		},
+		"response": response,
 	})
 }

@@ -42,7 +42,8 @@ func DeleteConversation(c *gin.Context, r *core.BaseHandler) {
 		return
 	}
 
-	go r.BackgroundDeleteChat(currentUserID, peerID, member.InternalChatID)
+	// Synchronously execute database deletion so immediate follow-up reads see updated deleted_before_id
+	r.BackgroundDeleteChat(currentUserID, peerID, member.InternalChatID)
 
 	c.JSON(http.StatusOK, gin.H{"response": 1})
 }
