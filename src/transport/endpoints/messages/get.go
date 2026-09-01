@@ -294,11 +294,12 @@ func GetByID(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	preloadedMap := make(map[uint64]db_models.Message)
-	if len(extraMsgIDs) > 0 && len(targetChatIDs) > 0 {
+	if len(extraMsgIDs) > 0 {
 		var extras []db_models.Message
-		dbx.Instance.Where("chat_id IN ? AND local_id IN ?", targetChatIDs, extraMsgIDs).Find(&extras)
+		dbx.Instance.Where("(chat_id IN ? AND local_id IN ?) OR id IN ?", targetChatIDs, extraMsgIDs, extraMsgIDs).Find(&extras)
 		for _, e := range extras {
 			preloadedMap[e.LocalID] = e
+			preloadedMap[e.ID] = e
 		}
 	}
 

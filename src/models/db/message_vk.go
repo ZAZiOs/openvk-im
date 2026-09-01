@@ -143,9 +143,10 @@ func (m *Message) ToVKApiStruct(tx *gorm.DB, depth int, currentUserID int64, req
 		if m.ForwardMessages != "" {
 			ids := strings.Split(m.ForwardMessages, ",")
 			var fwdMsgs []Message
-			tx.Where("chat_id = ? AND local_id IN ?", m.ChatID, ids).Find(&fwdMsgs)
+			tx.Where("(chat_id = ? AND local_id IN ?) OR id IN ?", m.ChatID, ids, ids).Find(&fwdMsgs)
 			for _, f := range fwdMsgs {
 				cache[f.LocalID] = f
+				cache[f.ID] = f
 			}
 		}
 	}
@@ -274,9 +275,10 @@ func (m *Message) ToVKApiStructLegacy(tx *gorm.DB, depth int, currentUserID int6
 	if tx != nil && m.ForwardMessages != "" {
 		ids := strings.Split(m.ForwardMessages, ",")
 		var fwdMsgs []Message
-		tx.Where("chat_id = ? AND local_id IN ?", m.ChatID, ids).Find(&fwdMsgs)
+		tx.Where("(chat_id = ? AND local_id IN ?) OR id IN ?", m.ChatID, ids, ids).Find(&fwdMsgs)
 		for _, f := range fwdMsgs {
 			cache[f.LocalID] = f
+			cache[f.ID] = f
 		}
 	}
 

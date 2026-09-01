@@ -193,15 +193,17 @@ func AddUserToConversation(chatID string, userID int64, inviterID int64, text st
 
 	err := dbx.Instance.Transaction(func(tx *gorm.DB) error {
 		var member db_models.ConversationMember
-		err := tx.Where("internal_chat_id = ? AND user_id = ?", chatID, userID).First(&member).Error
+		findErr := tx.Where("internal_chat_id = ? AND user_id = ?", chatID, userID).First(&member).Error
 
-		if err != nil && !errors.Is(err, gorm.ErrRecordNotFound) {
-			return err
+		if findErr != nil && !errors.Is(findErr, gorm.ErrRecordNotFound) {
+			return findErr
 		}
 
-		if err == nil && member.LeftAt == nil {
+		if findErr == nil && member.LeftAt == nil {
 			return errors.New("user is already in the conversation")
 		}
+
+		isNewMember := errors.Is(findErr, gorm.ErrRecordNotFound)
 
 		localID, err := NextLocalID(tx, chatID, inviterID)
 		if err != nil {
@@ -234,7 +236,7 @@ func AddUserToConversation(chatID string, userID int64, inviterID int64, text st
 			return err
 		}
 
-		if errors.Is(err, gorm.ErrRecordNotFound) {
+		if isNewMember {
 			newMember := db_models.ConversationMember{
 				InternalChatID: chatID,
 				UserID:         userID,
@@ -248,13 +250,15 @@ func AddUserToConversation(chatID string, userID int64, inviterID int64, text st
 				return err
 			}
 		} else {
-			err = tx.Model(&member).Updates(map[string]interface{}{
-				"left_at":          gorm.Expr("NULL"),
-				"invited_by":       inviterID,
-				"joined_at":        time.Now(),
-				"start_message_id": uint64(msg.ID),
-				"last_message_id":  localID,
-			}).Error
+			err = tx.Model(&db_models.ConversationMember{}).
+				Where("internal_chat_id = ? AND user_id = ?", chatID, userID).
+				Updates(map[string]interface{}{
+					"left_at":          gorm.Expr("NULL"),
+					"invited_by":       inviterID,
+					"joined_at":        time.Now(),
+					"start_message_id": uint64(msg.ID),
+					"last_message_id":  localID,
+				}).Error
 			if err != nil {
 				return err
 			}

@@ -157,9 +157,10 @@ func (r *BaseHandler) BroadcastMarkAsRead(ctx context.Context, chatID string, us
 	currentPeerID := chat.DerivePeerID(chatID, userID)
 
 	var unreadCount int64
-	db.Instance.Table("messages").
-		Where("chat_id = ? AND local_id > ? AND from_id != ?", chatID, lastReadID, userID).
-		Count(&unreadCount)
+	unreadQ := db.Instance.Table("messages").
+		Where("chat_id = ? AND local_id > ? AND from_id != ?", chatID, lastReadID, userID)
+	unreadQ = db_models.BuildVisibilityFilter(unreadQ, chatID, userID)
+	unreadQ.Count(&unreadCount)
 
 	r.LPRepo.PushEvent(ctx, userID, "read_income_before", lp_models.ReadIncomeBeforeEvent{
 		PeerID:  currentPeerID,

@@ -139,9 +139,10 @@ func (c *Conversation) ToVKApiStruct(tx *gorm.DB, currentUserID int64, member *C
 	}
 
 	var unreadCount int64
-	tx.Model(&Message{}).
-		Where("chat_id = ? AND local_id > ? AND from_id != ?", c.InternalID, conv.InRead, currentUserID).
-		Count(&unreadCount)
+	unreadQ := tx.Model(&Message{}).
+		Where("chat_id = ? AND local_id > ? AND from_id != ?", c.InternalID, conv.InRead, currentUserID)
+	unreadQ = BuildVisibilityFilter(unreadQ, c.InternalID, currentUserID)
+	unreadQ.Count(&unreadCount)
 	conv.UnreadCount = int(unreadCount)
 
 	if peerType == "chat" {

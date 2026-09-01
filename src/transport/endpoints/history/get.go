@@ -99,15 +99,21 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 			absOffset := int(-offset)
 
 			if rev == 1 {
+				var minID uint64
 				subQ := db.Instance.Model(&db_models.Message{}).Where("chat_id = ? AND local_id <= ?", chatID, startLocalID)
 				subQ = db_models.BuildVisibilityFilter(subQ, chatID, currentUserID)
-				query = query.Where("local_id >= (?)",
-					subQ.Select("local_id").Order("local_id DESC").Limit(1).Offset(absOffset-1))
+				if err := subQ.Select("local_id").Order("local_id DESC").Limit(1).Offset(absOffset-1).Scan(&minID).Error; err == nil && minID > 0 {
+					query = query.Where("local_id >= ?", minID)
+				}
+				query = query.Where("local_id <= ?", startLocalID)
 			} else {
+				var maxID uint64
 				subQ := db.Instance.Model(&db_models.Message{}).Where("chat_id = ? AND local_id >= ?", chatID, startLocalID)
 				subQ = db_models.BuildVisibilityFilter(subQ, chatID, currentUserID)
-				query = query.Where("local_id <= (?)",
-					subQ.Select("local_id").Order("local_id ASC").Limit(1).Offset(absOffset-1))
+				if err := subQ.Select("local_id").Order("local_id ASC").Limit(1).Offset(absOffset-1).Scan(&maxID).Error; err == nil && maxID > 0 {
+					query = query.Where("local_id <= ?", maxID)
+				}
+				query = query.Where("local_id >= ?", startLocalID)
 			}
 
 			offset = 0
@@ -160,9 +166,10 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 	preloadedMap := make(map[uint64]db_models.Message)
 	if len(extraMsgIDs) > 0 {
 		var extras []db_models.Message
-		db.Instance.Where("chat_id = ? AND local_id IN ?", chatID, extraMsgIDs).Find(&extras)
+		db.Instance.Where("(chat_id = ? AND local_id IN ?) OR id IN ?", chatID, extraMsgIDs, extraMsgIDs).Find(&extras)
 		for _, e := range extras {
 			preloadedMap[e.LocalID] = e
+			preloadedMap[e.ID] = e
 		}
 	}
 

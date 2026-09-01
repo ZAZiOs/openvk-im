@@ -1,11 +1,13 @@
 package messages
 
 import (
+	"context"
 	"net/http"
 	"strconv"
 
 	"ovk-im/src/db"
 	db_models "ovk-im/src/models/db"
+	lp_models "ovk-im/src/models/longpoll"
 	"ovk-im/src/repo/chat"
 	"ovk-im/src/transport/endpoints/core"
 
@@ -61,6 +63,52 @@ func Pin(c *gin.Context, r *core.BaseHandler) {
 		return
 	}
 
+	messageText := "pinned a message"
+	serviceMsg, err := chat.CreateServiceMessage(
+		currentUserID,
+		chatID,
+		messageText,
+		"chat_pin_message",
+		msg.FromID,
+		strconv.FormatUint(msg.LocalID, 10),
+	)
+	if err == nil && serviceMsg != nil {
+		members, _ := chat.GetActiveMemberIDs(nil, chatID)
+		lpAttach := lp_models.LPAttachments{
+			Source: "chat_pin_message",
+			From:   strconv.FormatInt(currentUserID, 10),
+			Mid:    strconv.FormatInt(msg.FromID, 10),
+		}
+
+		baseEvent := lp_models.NewMessageEvent{
+			MessageID:   uint64(serviceMsg.ID),
+			MinorID:     int64(serviceMsg.LocalID),
+			PeerID:      peerID,
+			Timestamp:   int(serviceMsg.CreatedAt.Unix()),
+			Text:        messageText,
+			Attachments: &lpAttach,
+		}
+
+		go func(parts []int64, event lp_models.NewMessageEvent) {
+			ctx := context.Background()
+			for _, uID := range parts {
+				userEvent := event
+				userEvent.Flags = lp_models.MessageFlags{Value: event.Flags.Value}
+
+				if uID == currentUserID {
+					userEvent.Flags.Add(lp_models.FlagOutbox)
+				} else {
+					userEvent.Flags.Add(lp_models.FlagUnread)
+				}
+
+				_, _, err := r.LPRepo.PushEvent(ctx, uID, "new_msg", userEvent)
+				if err == nil {
+					r.Broadcaster.Notify(uID)
+				}
+			}
+		}(members, baseEvent)
+	}
+
 	r.BroadcastChatSomethingChanged(c, peerID, currentUserID)
 
 	c.JSON(http.StatusOK, gin.H{
@@ -95,6 +143,51 @@ func Unpin(c *gin.Context, r *core.BaseHandler) {
 	if err != nil {
 		r.Reject(c, 10, "Internal server error")
 		return
+	}
+
+	messageText := "unpinned message"
+	serviceMsg, err := chat.CreateServiceMessage(
+		currentUserID,
+		chatID,
+		messageText,
+		"chat_unpin_message",
+		currentUserID,
+		"",
+	)
+	if err == nil && serviceMsg != nil {
+		members, _ := chat.GetActiveMemberIDs(nil, chatID)
+		lpAttach := lp_models.LPAttachments{
+			Source: "chat_unpin_message",
+			From:   strconv.FormatInt(currentUserID, 10),
+		}
+
+		baseEvent := lp_models.NewMessageEvent{
+			MessageID:   uint64(serviceMsg.ID),
+			MinorID:     int64(serviceMsg.LocalID),
+			PeerID:      peerID,
+			Timestamp:   int(serviceMsg.CreatedAt.Unix()),
+			Text:        messageText,
+			Attachments: &lpAttach,
+		}
+
+		go func(parts []int64, event lp_models.NewMessageEvent) {
+			ctx := context.Background()
+			for _, uID := range parts {
+				userEvent := event
+				userEvent.Flags = lp_models.MessageFlags{Value: event.Flags.Value}
+
+				if uID == currentUserID {
+					userEvent.Flags.Add(lp_models.FlagOutbox)
+				} else {
+					userEvent.Flags.Add(lp_models.FlagUnread)
+				}
+
+				_, _, err := r.LPRepo.PushEvent(ctx, uID, "new_msg", userEvent)
+				if err == nil {
+					r.Broadcaster.Notify(uID)
+				}
+			}
+		}(members, baseEvent)
 	}
 
 	r.BroadcastChatSomethingChanged(c, peerID, currentUserID)

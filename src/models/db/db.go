@@ -155,14 +155,14 @@ func BuildVisibilityFilter(query *gorm.DB, chatID string, userID int64) *gorm.DB
 	if chatID != "" {
 		if strings.HasPrefix(chatID, "c") {
 			query = query.Where(
-				"(NOT EXISTS (SELECT 1 FROM conversation_member_periods p0 WHERE p0.internal_chat_id = ?) OR EXISTS (SELECT 1 FROM conversation_member_periods p WHERE p.internal_chat_id = messages.chat_id AND p.user_id = ? AND messages.local_id >= p.start_local_id AND (p.end_local_id IS NULL OR messages.local_id <= p.end_local_id)))",
-				chatID, userID,
+				"(NOT EXISTS (SELECT 1 FROM conversation_member_periods p0 WHERE p0.internal_chat_id = ? AND p0.user_id = ?) OR EXISTS (SELECT 1 FROM conversation_member_periods p WHERE p.internal_chat_id = messages.chat_id AND p.user_id = ? AND messages.local_id >= p.start_local_id AND (p.end_local_id IS NULL OR messages.local_id <= p.end_local_id)))",
+				chatID, userID, userID,
 			)
 		}
 	} else {
 		query = query.Where(
-			"(messages.chat_id NOT LIKE 'c%' OR NOT EXISTS (SELECT 1 FROM conversation_member_periods p0 WHERE p0.internal_chat_id = messages.chat_id) OR EXISTS (SELECT 1 FROM conversation_member_periods p WHERE p.internal_chat_id = messages.chat_id AND p.user_id = ? AND messages.local_id >= p.start_local_id AND (p.end_local_id IS NULL OR messages.local_id <= p.end_local_id)))",
-			userID,
+			"(messages.chat_id NOT LIKE 'c%' OR NOT EXISTS (SELECT 1 FROM conversation_member_periods p0 WHERE p0.internal_chat_id = messages.chat_id AND p0.user_id = ?) OR EXISTS (SELECT 1 FROM conversation_member_periods p WHERE p.internal_chat_id = messages.chat_id AND p.user_id = ? AND messages.local_id >= p.start_local_id AND (p.end_local_id IS NULL OR messages.local_id <= p.end_local_id)))",
+			userID, userID,
 		)
 	}
 

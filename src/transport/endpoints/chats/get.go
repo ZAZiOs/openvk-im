@@ -71,7 +71,16 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	totalCount := rows[0].TotalCount
-	totalUnreadConversations := rows[0].TotalUnread
+	var totalUnreadConversations int64
+	if currentUserID != 0 {
+		unreadConvQ := db.Instance.Table("messages").
+			Joins("JOIN conversation_members ON conversation_members.internal_chat_id = messages.chat_id AND conversation_members.user_id = ? AND conversation_members.left_at IS NULL", currentUserID).
+			Where("messages.from_id != ?", currentUserID).
+			Where("messages.local_id > conversation_members.last_read_id").
+			Where("messages.local_id > COALESCE(conversation_members.deleted_before_id, 0)")
+		unreadConvQ = db_models.BuildVisibilityFilter(unreadConvQ, "", currentUserID)
+		unreadConvQ.Select("COUNT(DISTINCT messages.chat_id)").Scan(&totalUnreadConversations)
+	}
 
 	numRows := len(rows)
 	lastMsgKeys := make(map[string]uint64, numRows)
@@ -122,16 +131,16 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 		}
 		var results []UnreadRes
 
-		db.Instance.Table("messages").
+		unreadQ := db.Instance.Table("messages").
 			Select("messages.chat_id, COUNT(messages.id) as cnt").
 			Joins("JOIN conversation_members ON conversation_members.internal_chat_id = messages.chat_id").
 			Where("conversation_members.user_id = ?", currentUserID).
 			Where("messages.chat_id IN ?", unreadCheckIDs).
 			Where("messages.from_id != ?", currentUserID).
 			Where("messages.local_id > conversation_members.last_read_id").
-			Where("messages.local_id > COALESCE(conversation_members.deleted_before_id, 0)").
-			Where("messages.deleted_at IS NULL").
-			Group("messages.chat_id").Find(&results)
+			Where("messages.local_id > COALESCE(conversation_members.deleted_before_id, 0)")
+		unreadQ = db_models.BuildVisibilityFilter(unreadQ, "", currentUserID)
+		unreadQ.Group("messages.chat_id").Find(&results)
 
 		for _, res := range results {
 			unreadCounts[res.ChatID] = res.Cnt
@@ -635,6 +644,30 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 		}
 	}
 
+	unreadCountsById := make(map[string]int64, len(targetChatIDs))
+	if len(targetChatIDs) > 0 && currentUserID != 0 {
+		type UnreadRes struct {
+			ChatID string
+			Cnt    int64
+		}
+		var results []UnreadRes
+
+		unreadQ := db.Instance.Table("messages").
+			Select("messages.chat_id, COUNT(messages.id) as cnt").
+			Joins("JOIN conversation_members ON conversation_members.internal_chat_id = messages.chat_id").
+			Where("conversation_members.user_id = ?", currentUserID).
+			Where("messages.chat_id IN ?", targetChatIDs).
+			Where("messages.from_id != ?", currentUserID).
+			Where("messages.local_id > conversation_members.last_read_id").
+			Where("messages.local_id > COALESCE(conversation_members.deleted_before_id, 0)")
+		unreadQ = db_models.BuildVisibilityFilter(unreadQ, "", currentUserID)
+		unreadQ.Group("messages.chat_id").Find(&results)
+
+		for _, res := range results {
+			unreadCountsById[res.ChatID] = res.Cnt
+		}
+	}
+
 	responseItems := make([]gin.H, 0)
 	var userIDs, groupIDs, chatIDs []int64
 
@@ -673,6 +706,11 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 			}
 		}
 
+		var uCount int64 = 0
+		if uc, ok := unreadCountsById[m.InternalChatID]; ok {
+			uCount = uc
+		}
+
 		convObj := gin.H{
 			"peer":                         gin.H{"id": pID, "type": getPeerType(m.InternalChatID)},
 			"last_message_id":              lastMsgID,
@@ -681,6 +719,7 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 			"out_read":                     outRead,
 			"in_read_cmid":                 m.LastReadID,
 			"out_read_cmid":                outRead,
+			"unread_count":                 uCount,
 			"important":                    (m.Flags & 1) != 0,
 			"unanswered":                   (m.Flags & 2) != 0,
 			"sort_id": gin.H{
