@@ -60,6 +60,7 @@ type LPAttachments struct {
 	From    string
 	ReplyTo string
 	Fwd     string
+	CMID    string
 }
 
 type LPAttachmentItem struct {
@@ -93,6 +94,10 @@ func (a LPAttachments) ToMap() map[string]interface{} {
 	}
 	if a.Fwd != "" {
 		res["fwd"] = a.Fwd
+	}
+	if a.CMID != "" {
+		res["conversation_message_id"] = a.CMID
+		res["cmid"] = a.CMID
 	}
 
 	return res

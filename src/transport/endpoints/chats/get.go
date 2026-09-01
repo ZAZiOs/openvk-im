@@ -244,14 +244,29 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 			lastCMID = lastMsg.LocalID
 		}
 
+		var outRead uint64 = 0
+		if states, ok := readCache[m.InternalChatID]; ok {
+			for _, st := range states {
+				if st.UserID != currentUserID && st.LastReadID > outRead {
+					outRead = st.LastReadID
+				}
+			}
+		}
+		if outRead == 0 && strings.HasPrefix(m.InternalChatID, "dm") {
+			parts := strings.Split(m.InternalChatID[2:], "_")
+			if len(parts) == 2 && parts[0] == parts[1] {
+				outRead = m.LastReadID
+			}
+		}
+
 		conversationObj := gin.H{
 			"peer":                         gin.H{"id": pID, "type": getPeerType(m.InternalChatID)},
 			"last_message_id":              lastMsgID,
 			"last_conversation_message_id": lastCMID,
 			"in_read":                      m.LastReadID,
-			"out_read":                     m.LastMessageID,
+			"out_read":                     outRead,
 			"in_read_cmid":                 m.LastReadID,
-			"out_read_cmid":                m.LastMessageID,
+			"out_read_cmid":                outRead,
 			"important":                    (m.Flags & 1) != 0,
 			"unanswered":                   (m.Flags & 2) != 0,
 			"sort_id": gin.H{
@@ -643,14 +658,29 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 			lastCMID = lastMsg.LocalID
 		}
 
+		var outRead uint64 = 0
+		if states, ok := readCache[m.InternalChatID]; ok {
+			for _, st := range states {
+				if st.UserID != currentUserID && st.LastReadID > outRead {
+					outRead = st.LastReadID
+				}
+			}
+		}
+		if outRead == 0 && strings.HasPrefix(m.InternalChatID, "dm") {
+			parts := strings.Split(m.InternalChatID[2:], "_")
+			if len(parts) == 2 && parts[0] == parts[1] {
+				outRead = m.LastReadID
+			}
+		}
+
 		convObj := gin.H{
 			"peer":                         gin.H{"id": pID, "type": getPeerType(m.InternalChatID)},
 			"last_message_id":              lastMsgID,
 			"last_conversation_message_id": lastCMID,
 			"in_read":                      m.LastReadID,
-			"out_read":                     m.LastMessageID,
+			"out_read":                     outRead,
 			"in_read_cmid":                 m.LastReadID,
-			"out_read_cmid":                m.LastMessageID,
+			"out_read_cmid":                outRead,
 			"important":                    (m.Flags & 1) != 0,
 			"unanswered":                   (m.Flags & 2) != 0,
 			"sort_id": gin.H{
