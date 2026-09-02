@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 var (
@@ -47,7 +48,7 @@ func NextLocalID(tx *gorm.DB, chatID string, fromID int64) (uint64, error) {
 	var conv db_models.Conversation
 	var maxID uint64
 
-	err := tx.Set("gorm:query_option", "FOR UPDATE").
+	err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
 		Where("internal_id = ?", chatID).
 		First(&conv).Error
 
@@ -71,6 +72,10 @@ func NextLocalID(tx *gorm.DB, chatID string, fromID int64) (uint64, error) {
 		return 0, err
 	}
 
+	if conv.LastMessageID > maxID {
+		maxID = conv.LastMessageID
+	}
+
 	nextID := maxID + 1
 
 	if isNewConv {
@@ -82,7 +87,9 @@ func NextLocalID(tx *gorm.DB, chatID string, fromID int64) (uint64, error) {
 			return 0, err
 		}
 	} else {
-		err = tx.Model(&conv).Update("last_message_id", nextID).Error
+		err = tx.Table("conversations").
+			Where("id = ?", conv.ID).
+			Update("last_message_id", nextID).Error
 		if err != nil {
 			return 0, err
 		}

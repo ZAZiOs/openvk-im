@@ -137,6 +137,17 @@ func GetChatPreview(c *gin.Context, r *core.BaseHandler) {
 		return
 	}
 
+	userCount := 12
+    if countStr := c.DefaultQuery("user_count", "12"); countStr != "" {
+        if parsed, err := strconv.Atoi(countStr); err == nil && parsed > 0 {
+            userCount = parsed
+        }
+    }
+
+    if userCount > 100 {
+        userCount = 100
+    }
+
 	var invite db_models.ChatInvite
 	err := db.Instance.Where("code = ? AND revoked = ?", code, false).
 		Where("expires_at IS NULL OR expires_at > ?", time.Now()).
@@ -176,7 +187,7 @@ func GetChatPreview(c *gin.Context, r *core.BaseHandler) {
 	var memberIDs []int64
 	db.Instance.Model(&db_models.ConversationMember{}).
 		Where("internal_chat_id = ? AND left_at IS NULL", invite.InternalChatID).
-		Limit(10).
+		Limit(userCount).
 		Pluck("user_id", &memberIDs)
 
 	preview := gin.H{
