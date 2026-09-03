@@ -173,7 +173,6 @@ func GetImportantMessages(c *gin.Context, r *core.BaseHandler) {
 		return
 	}
 
-	var extraMsgIDs []uint64
 	var chatIDsToFetchMembers []string
 	var targetChatIDs []string
 	chatIDsMap := make(map[string]bool)
@@ -186,27 +185,9 @@ func GetImportantMessages(c *gin.Context, r *core.BaseHandler) {
 		if strings.HasPrefix(m.ChatID, "c") {
 			chatIDsToFetchMembers = append(chatIDsToFetchMembers, m.ChatID)
 		}
-		if m.ForwardMessages != "" {
-			ids := strings.Split(m.ForwardMessages, ",")
-			for _, idStr := range ids {
-				if id, err := strconv.ParseUint(strings.TrimSpace(idStr), 10, 64); err == nil {
-					extraMsgIDs = append(extraMsgIDs, id)
-				}
-			}
-		}
-		if m.ReplyTo != nil && *m.ReplyTo > 0 {
-			extraMsgIDs = append(extraMsgIDs, *m.ReplyTo)
-		}
 	}
 
-	preloadedMap := make(map[uint64]db_models.Message)
-	if len(extraMsgIDs) > 0 && len(targetChatIDs) > 0 {
-		var extras []db_models.Message
-		db.Instance.Where("chat_id IN ? AND local_id IN ?", targetChatIDs, extraMsgIDs).Find(&extras)
-		for _, e := range extras {
-			preloadedMap[e.LocalID] = e
-		}
-	}
+	preloadedMap := db_models.PreloadNestedMessages(db.Instance, msgs, 10)
 
 	readCache := make(map[string][]db_models.MemberReadState)
 	if len(targetChatIDs) > 0 {
@@ -256,7 +237,7 @@ func GetImportantMessages(c *gin.Context, r *core.BaseHandler) {
 		legacyItems := make([]db_models.VKApiMessageLegacy, 0, len(msgs))
 		for _, m := range msgs {
 			msgPeerID := chat.DerivePeerID(m.ChatID, currentUserID)
-			vkMsg := m.ToVKApiStructBatchLegacy(db.Instance, 0, currentUserID, msgPeerID, preloadedMap, readCache, nil)
+			vkMsg := m.ToVKApiStructBatchLegacy(db.Instance, 10, currentUserID, msgPeerID, preloadedMap, readCache, nil)
 			vkMsg.Important = true
 			if previewLen > 0 {
 				vkMsg.Body = core.TruncateWords(vkMsg.Body, previewLen)
@@ -303,7 +284,7 @@ func GetImportantMessages(c *gin.Context, r *core.BaseHandler) {
 		modernItems := make([]db_models.VKApiMessage, 0, len(msgs))
 		for _, m := range msgs {
 			msgPeerID := chat.DerivePeerID(m.ChatID, currentUserID)
-			vkMsg := m.ToVKApiStructBatch(db.Instance, 0, currentUserID, msgPeerID, preloadedMap, readCache, nil)
+			vkMsg := m.ToVKApiStructBatch(db.Instance, 10, currentUserID, msgPeerID, preloadedMap, readCache, nil)
 			vkMsg.Important = true
 			if previewLen > 0 {
 				vkMsg.Text = core.TruncateWords(vkMsg.Text, previewLen)

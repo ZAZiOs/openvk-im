@@ -120,8 +120,28 @@ func RemoveChatUser(c *gin.Context, r *core.BaseHandler) {
 		}
 
 		if !member.IsAdmin {
-			r.Reject(c, 15, "Access denied: you must be an admin to kick other users")
+			r.Reject(c, 15, "Access denied: you must be an admin or moderator to kick other users")
 			return
+		}
+
+		conv, err := chat.GetConversation(nil, chatID)
+		if err != nil || conv == nil {
+			r.Reject(c, 917, "Chat not found")
+			return
+		}
+
+		if conv.OwnerID != nil && userID == *conv.OwnerID {
+			r.Reject(c, 15, "Access denied: cannot kick conversation owner")
+			return
+		}
+
+		isCallerOwner := conv.OwnerID != nil && currentUserID == *conv.OwnerID
+		if !isCallerOwner {
+			targetMember, _ := chat.GetMember(nil, chatID, userID)
+			if targetMember != nil && targetMember.IsAdmin {
+				r.Reject(c, 15, "Access denied: moderators cannot kick other moderators")
+				return
+			}
 		}
 	}
 

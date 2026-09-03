@@ -267,7 +267,8 @@ func GetByID(c *gin.Context, r *core.BaseHandler) {
 		return
 	}
 
-	var extraMsgIDs []uint64
+	preloadedMap := db_models.PreloadNestedMessages(dbx.Instance, dbMessages, 10)
+
 	var chatIDsToFetchMembers []string
 	var targetChatIDs []string
 	chatIDsMap := make(map[string]bool)
@@ -279,27 +280,6 @@ func GetByID(c *gin.Context, r *core.BaseHandler) {
 		}
 		if strings.HasPrefix(m.ChatID, "c") {
 			chatIDsToFetchMembers = append(chatIDsToFetchMembers, m.ChatID)
-		}
-		if m.ForwardMessages != "" {
-			ids := strings.Split(m.ForwardMessages, ",")
-			for _, idStr := range ids {
-				if id, err := strconv.ParseUint(strings.TrimSpace(idStr), 10, 64); err == nil {
-					extraMsgIDs = append(extraMsgIDs, id)
-				}
-			}
-		}
-		if m.ReplyTo != nil && *m.ReplyTo > 0 {
-			extraMsgIDs = append(extraMsgIDs, *m.ReplyTo)
-		}
-	}
-
-	preloadedMap := make(map[uint64]db_models.Message)
-	if len(extraMsgIDs) > 0 {
-		var extras []db_models.Message
-		dbx.Instance.Where("(chat_id IN ? AND local_id IN ?) OR id IN ?", targetChatIDs, extraMsgIDs, extraMsgIDs).Find(&extras)
-		for _, e := range extras {
-			preloadedMap[e.LocalID] = e
-			preloadedMap[e.ID] = e
 		}
 	}
 
@@ -351,7 +331,7 @@ func GetByID(c *gin.Context, r *core.BaseHandler) {
 		legacyItems := make([]db_models.VKApiMessageLegacy, 0, len(dbMessages))
 		for _, m := range dbMessages {
 			mPeerID := chat.DerivePeerID(m.ChatID, currentUserID)
-			vkMsg := m.ToVKApiStructBatchLegacy(dbx.Instance, 5, currentUserID, mPeerID, preloadedMap, readCache, nil)
+			vkMsg := m.ToVKApiStructBatchLegacy(dbx.Instance, 10, currentUserID, mPeerID, preloadedMap, readCache, nil)
 			if previewLength > 0 {
 				vkMsg.Body = core.TruncateWords(vkMsg.Body, previewLength)
 			}
@@ -375,7 +355,7 @@ func GetByID(c *gin.Context, r *core.BaseHandler) {
 		modernItems := make([]db_models.VKApiMessage, 0, len(dbMessages))
 		for _, m := range dbMessages {
 			mPeerID := chat.DerivePeerID(m.ChatID, currentUserID)
-			vkMsg := m.ToVKApiStructBatch(dbx.Instance, 5, currentUserID, mPeerID, preloadedMap, readCache, nil)
+			vkMsg := m.ToVKApiStructBatch(dbx.Instance, 10, currentUserID, mPeerID, preloadedMap, readCache, nil)
 			if previewLength > 0 {
 				vkMsg.Text = core.TruncateWords(vkMsg.Text, previewLength)
 			}

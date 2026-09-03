@@ -29,6 +29,7 @@ type VKApiMessage struct {
 	IsPinned              int            `json:"is_pinned,omitempty"`
 	ReplyMessage          *VKApiMessage  `json:"reply_message,omitempty"`
 	ForwardMessages       []VKApiMessage `json:"fwd_messages,omitempty"`
+	HasForwardMessages    bool           `json:"has_fwd_messages,omitempty"`
 	Action                interface{}    `json:"action,omitempty"`
 }
 
@@ -44,6 +45,7 @@ type VKApiMessageLegacy struct {
 	Body            string               `json:"body"`
 	Attachments     string               `json:"attachments"`
 	ForwardMessages []VKApiMessageLegacy `json:"fwd_messages,omitempty"`
+	HasForwardMessages bool              `json:"has_fwd_messages,omitempty"`
 	Important       bool                 `json:"important,omitempty"`
 	Deleted         int                  `json:"deleted"`
 	Emoji           int                  `json:"emoji"`
@@ -125,32 +127,79 @@ func GetMessageReadInfo(tx *gorm.DB, chatID string, localID uint64, fromID int64
 	return readState, readBy
 }
 
+func PreloadNestedMessages(tx *gorm.DB, initialMsgs []Message, maxDepth int) map[uint64]Message {
+	cache := make(map[uint64]Message)
+	if tx == nil || len(initialMsgs) == 0 || maxDepth <= 0 {
+		return cache
+	}
+
+	for _, m := range initialMsgs {
+		cache[m.ID] = m
+		if m.LocalID > 0 {
+			cache[m.LocalID] = m
+		}
+	}
+
+	currentBatch := initialMsgs
+	for d := 0; d < maxDepth; d++ {
+		var neededIDs []uint64
+		neededSet := make(map[uint64]struct{})
+
+		for _, m := range currentBatch {
+			if m.ReplyTo != nil && *m.ReplyTo > 0 {
+				if _, ok := cache[*m.ReplyTo]; !ok {
+					if _, seen := neededSet[*m.ReplyTo]; !seen {
+						neededSet[*m.ReplyTo] = struct{}{}
+						neededIDs = append(neededIDs, *m.ReplyTo)
+					}
+				}
+			}
+
+			if m.ForwardMessages != "" {
+				ids := strings.Split(m.ForwardMessages, ",")
+				for _, idStr := range ids {
+					id, err := strconv.ParseUint(strings.TrimSpace(idStr), 10, 64)
+					if err != nil || id == 0 {
+						continue
+					}
+					if _, ok := cache[id]; !ok {
+						if _, seen := neededSet[id]; !seen {
+							neededSet[id] = struct{}{}
+							neededIDs = append(neededIDs, id)
+						}
+					}
+				}
+			}
+		}
+
+		if len(neededIDs) == 0 {
+			break
+		}
+
+		var foundMsgs []Message
+		err := tx.Where("id IN ? OR local_id IN ?", neededIDs, neededIDs).Find(&foundMsgs).Error
+		if err != nil || len(foundMsgs) == 0 {
+			break
+		}
+
+		currentBatch = foundMsgs
+		for _, f := range foundMsgs {
+			cache[f.ID] = f
+			if f.LocalID > 0 {
+				cache[f.LocalID] = f
+			}
+		}
+	}
+
+	return cache
+}
+
 func (m *Message) ToVKApiStruct(tx *gorm.DB, depth int, currentUserID int64, requestedPeerID int64) VKApiMessage {
 	if depth <= 0 || (m.ReplyTo == nil && m.ForwardMessages == "") {
 		return m.ToVKApiStructBatch(tx, depth, currentUserID, requestedPeerID, nil, nil, nil)
 	}
 
-	cache := make(map[uint64]Message)
-
-	if tx != nil {
-		if m.ReplyTo != nil && *m.ReplyTo > 0 {
-			var r Message
-			if tx.Where("chat_id = ? AND local_id = ?", m.ChatID, *m.ReplyTo).First(&r).Error == nil {
-				cache[r.LocalID] = r
-			}
-		}
-
-		if m.ForwardMessages != "" {
-			ids := strings.Split(m.ForwardMessages, ",")
-			var fwdMsgs []Message
-			tx.Where("(chat_id = ? AND local_id IN ?) OR id IN ?", m.ChatID, ids, ids).Find(&fwdMsgs)
-			for _, f := range fwdMsgs {
-				cache[f.LocalID] = f
-				cache[f.ID] = f
-			}
-		}
-	}
-
+	cache := PreloadNestedMessages(tx, []Message{*m}, depth)
 	return m.ToVKApiStructBatch(tx, depth, currentUserID, requestedPeerID, cache, nil, nil)
 }
 
@@ -228,16 +277,19 @@ func (m *Message) ToVKApiStructBatch(tx *gorm.DB, depth int, currentUserID int64
 		}
 	}
 
-	if m.ForwardMessages != "" && depth > 0 && cache != nil {
-		ids := strings.Split(m.ForwardMessages, ",")
-		for _, idStr := range ids {
-			id, err := strconv.ParseUint(strings.TrimSpace(idStr), 10, 64)
-			if err != nil {
-				continue
-			}
+	if m.ForwardMessages != "" {
+		vkMsg.HasForwardMessages = true
+		if depth > 0 && cache != nil {
+			ids := strings.Split(m.ForwardMessages, ",")
+			for _, idStr := range ids {
+				id, err := strconv.ParseUint(strings.TrimSpace(idStr), 10, 64)
+				if err != nil {
+					continue
+				}
 
-			if fwdMsg, ok := cache[id]; ok {
-				vkMsg.ForwardMessages = append(vkMsg.ForwardMessages, fwdMsg.ToVKApiStructBatch(tx, depth-1, currentUserID, requestedPeerID, cache, readCache, pinnedCache))
+				if fwdMsg, ok := cache[id]; ok {
+					vkMsg.ForwardMessages = append(vkMsg.ForwardMessages, fwdMsg.ToVKApiStructBatch(tx, depth-1, currentUserID, requestedPeerID, cache, readCache, pinnedCache))
+				}
 			}
 		}
 	}
@@ -271,17 +323,7 @@ func (m *Message) ToVKApiStructLegacy(tx *gorm.DB, depth int, currentUserID int6
 		return m.ToVKApiStructBatchLegacy(tx, depth, currentUserID, requestedPeerID, nil, nil, nil)
 	}
 
-	cache := make(map[uint64]Message)
-	if tx != nil && m.ForwardMessages != "" {
-		ids := strings.Split(m.ForwardMessages, ",")
-		var fwdMsgs []Message
-		tx.Where("(chat_id = ? AND local_id IN ?) OR id IN ?", m.ChatID, ids, ids).Find(&fwdMsgs)
-		for _, f := range fwdMsgs {
-			cache[f.LocalID] = f
-			cache[f.ID] = f
-		}
-	}
-
+	cache := PreloadNestedMessages(tx, []Message{*m}, depth)
 	return m.ToVKApiStructBatchLegacy(tx, depth, currentUserID, requestedPeerID, cache, nil, nil)
 }
 
@@ -349,16 +391,19 @@ func (m *Message) ToVKApiStructBatchLegacy(tx *gorm.DB, depth int, currentUserID
 		vkMsg.ActionText = m.ActionText
 	}
 
-	if !isDeleted && m.ForwardMessages != "" && depth > 0 && cache != nil {
-		ids := strings.Split(m.ForwardMessages, ",")
-		for _, idStr := range ids {
-			id, err := strconv.ParseUint(strings.TrimSpace(idStr), 10, 64)
-			if err != nil {
-				continue
-			}
+	if !isDeleted && m.ForwardMessages != "" {
+		vkMsg.HasForwardMessages = true
+		if depth > 0 && cache != nil {
+			ids := strings.Split(m.ForwardMessages, ",")
+			for _, idStr := range ids {
+				id, err := strconv.ParseUint(strings.TrimSpace(idStr), 10, 64)
+				if err != nil {
+					continue
+				}
 
-			if fwdMsg, ok := cache[id]; ok {
-				vkMsg.ForwardMessages = append(vkMsg.ForwardMessages, fwdMsg.ToVKApiStructBatchLegacy(tx, depth-1, currentUserID, requestedPeerID, cache, readCache, pinnedCache))
+				if fwdMsg, ok := cache[id]; ok {
+					vkMsg.ForwardMessages = append(vkMsg.ForwardMessages, fwdMsg.ToVKApiStructBatchLegacy(tx, depth-1, currentUserID, requestedPeerID, cache, readCache, pinnedCache))
+				}
 			}
 		}
 	} else if !isDeleted && m.ReplyTo != nil && *m.ReplyTo > 0 && depth > 0 && cache != nil {

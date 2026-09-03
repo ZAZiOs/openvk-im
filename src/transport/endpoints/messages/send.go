@@ -2,6 +2,7 @@ package messages
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math/rand"
 	"net/http"
@@ -59,6 +60,59 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 	}
 	replyToStr := c.DefaultQuery("reply_to", c.PostForm("reply_to"))
 	forwardMessagesRaw := c.DefaultQuery("forward_messages", c.PostForm("forward_messages"))
+	forwardRaw := c.DefaultQuery("forward", c.PostForm("forward"))
+
+	if forwardRaw != "" && forwardMessagesRaw == "" {
+		type ForwardPayload struct {
+			OwnerID                int64    `json:"owner_id"`
+			PeerID                 int64    `json:"peer_id"`
+			ConversationMessageIDs []uint64 `json:"conversation_message_ids"`
+			MessageIDs             []uint64 `json:"message_ids"`
+			IsReply                bool     `json:"is_reply"`
+		}
+		var fwdPayload ForwardPayload
+		if err := json.Unmarshal([]byte(forwardRaw), &fwdPayload); err == nil {
+			if fwdPayload.IsReply && replyToStr == "" {
+				if len(fwdPayload.ConversationMessageIDs) > 0 {
+					replyToStr = strconv.FormatUint(fwdPayload.ConversationMessageIDs[0], 10)
+				} else if len(fwdPayload.MessageIDs) > 0 {
+					replyToStr = strconv.FormatUint(fwdPayload.MessageIDs[0], 10)
+				}
+			} else if !fwdPayload.IsReply {
+				if len(fwdPayload.MessageIDs) > 0 {
+					var idStrs []string
+					for _, id := range fwdPayload.MessageIDs {
+						idStrs = append(idStrs, strconv.FormatUint(id, 10))
+					}
+					forwardMessagesRaw = strings.Join(idStrs, ",")
+				} else if len(fwdPayload.ConversationMessageIDs) > 0 {
+					srcPeerID := fwdPayload.PeerID
+					if srcPeerID == 0 {
+						srcPeerID = peerID
+					}
+					srcChatID := chat.GetInternalChatID(srcPeerID, currentUserID)
+					var globalIDs []uint64
+					dbx.Instance.Model(&db_models.Message{}).
+						Where("chat_id = ? AND local_id IN ?", srcChatID, fwdPayload.ConversationMessageIDs).
+						Order("local_id ASC").
+						Pluck("id", &globalIDs)
+					if len(globalIDs) > 0 {
+						var idStrs []string
+						for _, id := range globalIDs {
+							idStrs = append(idStrs, strconv.FormatUint(id, 10))
+						}
+						forwardMessagesRaw = strings.Join(idStrs, ",")
+					} else {
+						var idStrs []string
+						for _, id := range fwdPayload.ConversationMessageIDs {
+							idStrs = append(idStrs, strconv.FormatUint(id, 10))
+						}
+						forwardMessagesRaw = strings.Join(idStrs, ",")
+					}
+				}
+			}
+		}
+	}
 
 	// Message, Attachment, Reply or Forward
 	if message == "" && attachment == "" && replyToStr == "" && forwardMessagesRaw == "" {

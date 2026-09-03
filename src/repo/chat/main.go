@@ -115,7 +115,7 @@ func GetActiveMemberIDs(tx *gorm.DB, chatID string) ([]int64, error) {
 
 func GetConversation(tx *gorm.DB, chatID string) (*db_models.Conversation, error) {
 	var conv db_models.Conversation
-	err := tx.Where("internal_id = ?", chatID).First(&conv).Error
+	err := getDB(tx).Where("internal_id = ?", chatID).First(&conv).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
@@ -285,10 +285,32 @@ func AddUserToConversation(chatID string, userID int64, inviterID int64, text st
 	return msg, nil
 }
 
+func IsChatOwner(tx *gorm.DB, chatID string, userID int64) bool {
+	var conv db_models.Conversation
+	if getDB(tx).Select("owner_id").Where("internal_id = ?", chatID).First(&conv).Error != nil || conv.OwnerID == nil {
+		return false
+	}
+	return *conv.OwnerID == userID
+}
+
+func IsChatModerator(tx *gorm.DB, chatID string, userID int64) bool {
+	member, err := GetMember(tx, chatID, userID)
+	if err != nil || member == nil || !member.IsAdmin {
+		return false
+	}
+	return !IsChatOwner(tx, chatID, userID)
+}
+
 func RemoveUserFromConversation(tx *gorm.DB, chatID string, userID int64) error {
+	updates := map[string]interface{}{
+		"left_at": time.Now(),
+	}
+	if !IsChatOwner(tx, chatID, userID) {
+		updates["is_admin"] = false
+	}
 	return getDB(tx).Model(&db_models.ConversationMember{}).
 		Where("internal_chat_id = ? AND user_id = ?", chatID, userID).
-		Update("left_at", time.Now()).Error
+		Updates(updates).Error
 }
 
 func CloseActiveMemberPeriod(tx *gorm.DB, chatID string, userID int64, endLocalID uint64) error {
@@ -450,7 +472,7 @@ func DerivePeerID(chatID string, currentUserID int64) int64 {
 
 func RefreshChatLastMessage(tx *gorm.DB, internalChatID string) error {
 	var lastMsg db_models.Message
-	err := tx.Where("chat_id = ? AND (flags & 128) = 0", internalChatID).
+	err := getDB(tx).Where("chat_id = ? AND (flags & 128) = 0", internalChatID).
 		Order("local_id DESC").
 		First(&lastMsg).Error
 
@@ -459,13 +481,13 @@ func RefreshChatLastMessage(tx *gorm.DB, internalChatID string) error {
 		newLastID = lastMsg.LocalID
 	}
 
-	if err := tx.Model(&db_models.Conversation{}).
+	if err := getDB(tx).Model(&db_models.Conversation{}).
 		Where("internal_id = ?", internalChatID).
 		Update("last_message_id", newLastID).Error; err != nil {
 		return err
 	}
 
-	return tx.Model(&db_models.ConversationMember{}).
+	return getDB(tx).Model(&db_models.ConversationMember{}).
 		Where("internal_chat_id = ?", internalChatID).
 		Update("last_message_id", newLastID).Error
 }

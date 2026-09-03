@@ -165,42 +165,41 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 			chatMembersMap[m.InternalChatID] = append(chatMembersMap[m.InternalChatID], m.UserID)
 		}
 
+		type ChatOwner struct {
+			InternalID string
+			OwnerID    *int64
+		}
+		var owners []ChatOwner
+		db.Instance.Table("conversations").
+			Select("internal_id, owner_id").
+			Where("internal_id IN ?", chatIDsToFetchMembers).
+			Find(&owners)
+
+		for _, o := range owners {
+			if o.OwnerID != nil {
+				adminMap[o.InternalID] = *o.OwnerID
+			}
+		}
+
 		var admins []ChatMember
 		db.Instance.Table("conversation_members").
 			Select("internal_chat_id, user_id").
 			Where("internal_chat_id IN ? AND is_admin = ? AND left_at IS NULL", chatIDsToFetchMembers, true).
+			Order("joined_at ASC").
 			Find(&admins)
 
 		for _, a := range admins {
-			adminMap[a.InternalChatID] = a.UserID
-		}
-	}
-
-	preloadedMap := make(map[uint64]db_models.Message)
-	extraMsgIDs := make([]uint64, 0, len(msgMap))
-	convIDs := make([]string, 0, len(msgMap))
-
-	for chatID, msg := range msgMap {
-		convIDs = append(convIDs, chatID)
-		if msg.ReplyTo != nil && *msg.ReplyTo > 0 {
-			extraMsgIDs = append(extraMsgIDs, *msg.ReplyTo)
-		}
-		if msg.ForwardMessages != "" {
-			for _, idStr := range strings.Split(msg.ForwardMessages, ",") {
-				if id, err := strconv.ParseUint(strings.TrimSpace(idStr), 10, 64); err == nil {
-					extraMsgIDs = append(extraMsgIDs, id)
-				}
+			if _, exists := adminMap[a.InternalChatID]; !exists || adminMap[a.InternalChatID] == 0 {
+				adminMap[a.InternalChatID] = a.UserID
 			}
 		}
 	}
 
-	if len(extraMsgIDs) > 0 {
-		var extras []db_models.Message
-		db.Instance.Where("chat_id IN ? AND local_id IN ?", convIDs, extraMsgIDs).Find(&extras)
-		for _, e := range extras {
-			preloadedMap[e.LocalID] = e
-		}
+	initialMsgs := make([]db_models.Message, 0, len(msgMap))
+	for _, msg := range msgMap {
+		initialMsgs = append(initialMsgs, msg)
 	}
+	preloadedMap := db_models.PreloadNestedMessages(db.Instance, initialMsgs, 5)
 
 	readCache := make(map[string][]db_models.MemberReadState)
 	if len(lastMsgKeys) > 0 {
@@ -359,6 +358,22 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 
 		adminMap := make(map[string]int64, len(internalIDs))
 		if len(internalIDs) > 0 {
+			type ChatOwner struct {
+				InternalID string
+				OwnerID    *int64
+			}
+			var owners []ChatOwner
+			db.Instance.Table("conversations").
+				Select("internal_id, owner_id").
+				Where("internal_id IN ?", internalIDs).
+				Find(&owners)
+
+			for _, o := range owners {
+				if o.OwnerID != nil {
+					adminMap[o.InternalID] = *o.OwnerID
+				}
+			}
+
 			type ChatAdmin struct {
 				InternalChatID string
 				UserID         int64
@@ -367,10 +382,13 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 			db.Instance.Table("conversation_members").
 				Select("internal_chat_id, user_id").
 				Where("internal_chat_id IN ? AND is_admin = ? AND left_at IS NULL", internalIDs, true).
+				Order("joined_at ASC").
 				Find(&admins)
 
 			for _, a := range admins {
-				adminMap[a.InternalChatID] = a.UserID
+				if _, exists := adminMap[a.InternalChatID]; !exists || adminMap[a.InternalChatID] == 0 {
+					adminMap[a.InternalChatID] = a.UserID
+				}
 			}
 		}
 
@@ -441,6 +459,9 @@ func GetConversationMembers(c *gin.Context, r *core.BaseHandler) {
 	items := make([]gin.H, 0)
 
 	if peerID > 2000000000 || strings.HasPrefix(internalChatId, "c") {
+		var conv db_models.Conversation
+		db.Instance.Select("owner_id").Where("internal_id = ?", internalChatId).First(&conv)
+
 		db.Instance.Where("internal_chat_id = ? AND left_at IS NULL", internalChatId).Find(&members)
 
 		for _, m := range members {
@@ -449,8 +470,13 @@ func GetConversationMembers(c *gin.Context, r *core.BaseHandler) {
 				"invited_by": m.InvitedBy,
 				"join_date":  m.JoinedAt.Unix(),
 			}
-			if m.IsAdmin {
+			isOwner := conv.OwnerID != nil && m.UserID == *conv.OwnerID
+			if isOwner {
 				item["is_admin"] = true
+				item["is_owner"] = true
+			} else if m.IsAdmin {
+				item["is_admin"] = true
+				item["is_moderator"] = true
 			}
 			items = append(items, item)
 
@@ -560,19 +586,37 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 			chatMembersMap[m.InternalChatID] = append(chatMembersMap[m.InternalChatID], m.UserID)
 		}
 
+		type ChatOwner struct {
+			InternalID string
+			OwnerID    *int64
+		}
+		var owners []ChatOwner
+		db.Instance.Table("conversations").
+			Select("internal_id, owner_id").
+			Where("internal_id IN ?", chatIDsToFetchMembers).
+			Find(&owners)
+
+		for _, o := range owners {
+			if o.OwnerID != nil {
+				adminMap[o.InternalID] = *o.OwnerID
+			}
+		}
+
 		var admins []ChatMember
 		db.Instance.Table("conversation_members").
 			Select("internal_chat_id, user_id").
 			Where("internal_chat_id IN ? AND is_admin = ? AND left_at IS NULL", chatIDsToFetchMembers, true).
+			Order("joined_at ASC").
 			Find(&admins)
 
 		for _, a := range admins {
-			adminMap[a.InternalChatID] = a.UserID
+			if _, exists := adminMap[a.InternalChatID]; !exists || adminMap[a.InternalChatID] == 0 {
+				adminMap[a.InternalChatID] = a.UserID
+			}
 		}
 	}
 
 	msgMap := make(map[string]db_models.Message)
-	extraMsgIDs := make([]uint64, 0)
 	convIDs := make([]string, 0)
 
 	if len(lastMsgKeys) > 0 {
@@ -584,17 +628,6 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 		for _, msg := range lastMessages {
 			msgMap[msg.ChatID] = msg
 			convIDs = append(convIDs, msg.ChatID)
-
-			if msg.ReplyTo != nil && *msg.ReplyTo > 0 {
-				extraMsgIDs = append(extraMsgIDs, *msg.ReplyTo)
-			}
-			if msg.ForwardMessages != "" {
-				for _, idStr := range strings.Split(msg.ForwardMessages, ",") {
-					if id, err := strconv.ParseUint(strings.TrimSpace(idStr), 10, 64); err == nil {
-						extraMsgIDs = append(extraMsgIDs, id)
-					}
-				}
-			}
 		}
 	}
 
@@ -612,14 +645,11 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 		}
 	}
 
-	preloadedMap := make(map[uint64]db_models.Message)
-	if len(extraMsgIDs) > 0 {
-		var extras []db_models.Message
-		db.Instance.Where("chat_id IN ? AND local_id IN ?", convIDs, extraMsgIDs).Find(&extras)
-		for _, e := range extras {
-			preloadedMap[e.LocalID] = e
-		}
+	initialMsgs := make([]db_models.Message, 0, len(msgMap))
+	for _, msg := range msgMap {
+		initialMsgs = append(initialMsgs, msg)
 	}
+	preloadedMap := db_models.PreloadNestedMessages(db.Instance, initialMsgs, 5)
 
 	readCache := make(map[string][]db_models.MemberReadState)
 	if len(lastMsgKeys) > 0 {

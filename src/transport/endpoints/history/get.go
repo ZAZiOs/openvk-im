@@ -146,30 +146,7 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 		Scan(&memberStates)
 	readCache[chatID] = memberStates
 
-	var extraMsgIDs []uint64
-	for _, m := range msgs {
-		if m.ForwardMessages != "" {
-			ids := strings.Split(m.ForwardMessages, ",")
-			for _, idStr := range ids {
-				if id, err := strconv.ParseUint(strings.TrimSpace(idStr), 10, 64); err == nil {
-					extraMsgIDs = append(extraMsgIDs, id)
-				}
-			}
-		}
-		if m.ReplyTo != nil && *m.ReplyTo > 0 {
-			extraMsgIDs = append(extraMsgIDs, *m.ReplyTo)
-		}
-	}
-
-	preloadedMap := make(map[uint64]db_models.Message)
-	if len(extraMsgIDs) > 0 {
-		var extras []db_models.Message
-		db.Instance.Where("(chat_id = ? AND local_id IN ?) OR id IN ?", chatID, extraMsgIDs, extraMsgIDs).Find(&extras)
-		for _, e := range extras {
-			preloadedMap[e.LocalID] = e
-			preloadedMap[e.ID] = e
-		}
-	}
+	preloadedMap := db_models.PreloadNestedMessages(db.Instance, msgs, 10)
 
 	var chatMembers []int64
 	var chatAdminID int64
@@ -198,7 +175,7 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 	if apiV.IsOlderThan(5, 80) {
 		legacyItems := make([]db_models.VKApiMessageLegacy, len(msgs))
 		for i, m := range msgs {
-			vkMsg := m.ToVKApiStructBatchLegacy(db.Instance, 1, currentUserID, peerID, preloadedMap, readCache, nil)
+			vkMsg := m.ToVKApiStructBatchLegacy(db.Instance, 10, currentUserID, peerID, preloadedMap, readCache, nil)
 			if previewLength > 0 {
 				vkMsg.Body = core.TruncateWords(vkMsg.Body, previewLength)
 			}
@@ -219,7 +196,7 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 	} else {
 		modernItems := make([]db_models.VKApiMessage, len(msgs))
 		for i, m := range msgs {
-			vkMsg := m.ToVKApiStructBatch(db.Instance, 1, currentUserID, peerID, preloadedMap, readCache, nil)
+			vkMsg := m.ToVKApiStructBatch(db.Instance, 10, currentUserID, peerID, preloadedMap, readCache, nil)
 			if previewLength > 0 {
 				vkMsg.Text = core.TruncateWords(vkMsg.Text, previewLength)
 			}

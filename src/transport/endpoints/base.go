@@ -89,6 +89,8 @@ var writeMethods = map[string]bool{
 	"messages.joinChatByInviteLink":        true,
 	"messages.setActivity":                 true,
 	"im.sendAction":                        true,
+	"im.setChatModerator":                  true,
+	"im.removeChatModerator":               true,
 }
 
 func (r *Router) BasicHandler(c *gin.Context) {
@@ -122,7 +124,6 @@ func (r *Router) BasicHandler(c *gin.Context) {
 		"messages.getById":                    messages.GetByID,
 		"messages.getByConversationMessageId": messages.GetByConversationMessageID,
 		"messages.getNearestMessageForDate":   messages.GetNearestMessageForDate,
-		"messages.getMessageViewers":          messages.GetMessageViewers,
 		"im.getMessageViewers":                messages.GetMessageViewers,
 
 		"messages.getHistory":            history.GetHistory,
@@ -157,6 +158,9 @@ func (r *Router) BasicHandler(c *gin.Context) {
 		"im.checkPeerExist":         custom.CheckPeerExist,
 		"im.sendAction":             custom.SendAction,
 		"im.getPinnedMessage":       messages.GetPinnedMessage,
+		"im.setChatModerator":       chats.SetChatModerator,
+		"im.removeChatModerator":    chats.RemoveChatModerator,
+		"im.getChatModerators":      chats.GetChatModerators,
 
 		// Legacy aliases (VK API <=5.80)
 		"messages.getDialogs":    chats.GetConversations,
