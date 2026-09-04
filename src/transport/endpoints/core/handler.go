@@ -83,7 +83,7 @@ func (h *BaseHandler) Reject(c *gin.Context, errorCode int, errorMsg string) {
 }
 
 var (
-	reAttachment   = regexp.MustCompile(`^(photo|video|audio|doc|wall|market|poll|question|gift)-?\d+_\d+(?:_[a-zA-Z0-9]+)?$`)
+	reAttachment   = regexp.MustCompile(`^(?:(photo|video|audio|doc|wall|market|poll|question|gift)-?\d+_\d+(?:_[a-zA-Z0-9]+)?|sticker\d+)$`)
 	reMarkdownLink = regexp.MustCompile(`\[([^\]]+)\]\((https?://[^\s\)]+)\)`)
 	rePlainURL     = regexp.MustCompile(`(?:^|[\s\(\[\{<]|&gt;)(https?://[^\s<>"'\]\)]+)`)
 )
