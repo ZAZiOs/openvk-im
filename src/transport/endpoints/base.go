@@ -161,6 +161,11 @@ func (r *Router) BasicHandler(c *gin.Context) {
 		"im.setChatModerator":       chats.SetChatModerator,
 		"im.removeChatModerator":    chats.RemoveChatModerator,
 		"im.getChatModerators":      chats.GetChatModerators,
+		"im.setOnline":              status.SetOnline,
+		"im.setOffline":             status.SetOffline,
+		"im.setUserOnline":          status.SetOnline,
+		"im.setUserOffline":         status.SetOffline,
+		"im.touchUserOnline":        status.TouchOnline,
 
 		// Legacy aliases (VK API <=5.80)
 		"messages.getDialogs":    chats.GetConversations,

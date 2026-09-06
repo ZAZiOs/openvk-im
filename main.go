@@ -21,6 +21,7 @@ import (
 	"ovk-im/src/transport/broadcaster"
 	"ovk-im/src/transport/endpoints"
 	"ovk-im/src/transport/endpoints/core"
+	"ovk-im/src/transport/endpoints/status"
 	lp_trans "ovk-im/src/transport/longpoll"
 )
 
@@ -82,6 +83,8 @@ func startServer() {
 			lpBroadcaster.Notify(userID)
 		}
 	}()
+
+	status.StartOnlineTracker(ctx, db.Instance, redis.Client, lpRepo, lpBroadcaster)
 
 	if !env.IsDev() {
 		gin.SetMode(gin.ReleaseMode)

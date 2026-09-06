@@ -18,6 +18,8 @@ func SetActivity(c *gin.Context, r *core.BaseHandler) {
 	userIDVal, _ := c.Get("userID")
 	currentUserID := userIDVal.(int64)
 
+	TouchUserActivity(c.Request.Context(), r.DB, r.LPRepo.Client, r.LPRepo, r.Broadcaster, currentUserID)
+
 	peerID, _ := strconv.ParseInt(c.Query("peer_id"), 10, 64)
 	if peerID == 0 {
 		if uID := c.Query("user_id"); uID != "" {

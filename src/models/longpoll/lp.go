@@ -452,12 +452,16 @@ func (e ReadOutcomeBeforeEvent) ToSlice(cfg LPConfig) interface{} {
 
 // v0
 type GotOnlineEvent struct {
-	UserID    int64
-	Extra     int64  // != 0; last byte =
-	Timestamp uint64 // Last action at
+	UserID    int64  `json:"user_id"`
+	Extra     int64  `json:"extra"`     // != 0; last byte =
+	Timestamp uint64 `json:"timestamp"` // Last action at
 }
 
 func (e GotOnlineEvent) ToSlice(cfg LPConfig) interface{} {
+	uid := e.UserID
+	if uid > 0 {
+		uid = -uid
+	}
 	if cfg.Described == 2 {
 		return map[string]interface{}{
 			"type":      "user.online",
@@ -467,17 +471,21 @@ func (e GotOnlineEvent) ToSlice(cfg LPConfig) interface{} {
 			"timestamp": e.Timestamp,
 		}
 	}
-	return []interface{}{8, e.UserID, e.Extra, e.Timestamp}
+	return []interface{}{8, uid, e.Extra, e.Timestamp}
 }
 
 // v0
 type GotOfflineEvent struct {
-	UserID    int64
-	Flags     int64  // 0 - Left site; 1 - Timeout
-	Timestamp uint64 // Last action at
+	UserID    int64  `json:"user_id"`
+	Flags     int64  `json:"flags"`     // 0 - Left site; 1 - Timeout
+	Timestamp uint64 `json:"timestamp"` // Last action at
 }
 
 func (e GotOfflineEvent) ToSlice(cfg LPConfig) interface{} {
+	uid := e.UserID
+	if uid > 0 {
+		uid = -uid
+	}
 	if cfg.Described == 2 {
 		return map[string]interface{}{
 			"type":      "user.offline",
@@ -487,7 +495,7 @@ func (e GotOfflineEvent) ToSlice(cfg LPConfig) interface{} {
 			"timestamp": e.Timestamp,
 		}
 	}
-	return []interface{}{9, e.UserID, e.Flags, e.Timestamp}
+	return []interface{}{9, uid, e.Flags, e.Timestamp}
 }
 
 // v1
