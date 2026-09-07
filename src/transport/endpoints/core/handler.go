@@ -41,6 +41,78 @@ type RequestParam struct {
 	Value string `json:"value"`
 }
 
+func (b *BaseHandler) Get(c *gin.Context, key string) string {
+	if val := c.Query(key); val != "" {
+		return strings.TrimSpace(val)
+	}
+	return strings.TrimSpace(c.PostForm(key))
+}
+
+func (b *BaseHandler) GetDefault(c *gin.Context, key, fallback string) string {
+	if val := b.Get(c, key); val != "" {
+		return val
+	}
+	return fallback
+}
+
+func (b *BaseHandler) GetInt64(c *gin.Context, key string, fallback int64) int64 {
+	val := b.Get(c, key)
+	if val == "" {
+		return fallback
+	}
+	n, err := strconv.ParseInt(val, 10, 64)
+	if err != nil {
+		return fallback
+	}
+	return n
+}
+
+func (b *BaseHandler) GetUint64(c *gin.Context, key string, fallback uint64) uint64 {
+	val := b.Get(c, key)
+	if val == "" {
+		return fallback
+	}
+	n, err := strconv.ParseUint(val, 10, 64)
+	if err != nil {
+		return fallback
+	}
+	return n
+}
+
+func (b *BaseHandler) GetInt(c *gin.Context, key string, fallback int) int {
+	val := b.Get(c, key)
+	if val == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(val)
+	if err != nil {
+		return fallback
+	}
+	return n
+}
+
+func (b *BaseHandler) GetBool(c *gin.Context, key string, fallback bool) bool {
+	val := strings.ToLower(b.Get(c, key))
+	switch val {
+	case "1", "true":
+		return true
+	case "0", "false":
+		return false
+	default:
+		return fallback
+	}
+}
+
+func (b *BaseHandler) GetPeerID(c *gin.Context) int64 {
+	if uID := b.GetInt64(c, "user_id", 0); uID != 0 {
+		return uID
+	}
+	if cID := b.GetInt64(c, "chat_id", 0); cID > 0 {
+		return 2000000000 + cID
+	}
+	return b.GetInt64(c, "peer_id", 0)
+}
+
 func GetApiV(c *gin.Context) db_models.ApiV {
 	if val, exists := c.Get("apiV"); exists {
 		if ver, ok := val.(db_models.ApiV); ok {

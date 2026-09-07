@@ -4,16 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"math/rand"
 	"net/http"
-	dbx "ovk-im/src/db"
-	db_models "ovk-im/src/models/db"
-	lp_models "ovk-im/src/models/longpoll"
-	"ovk-im/src/repo/chat"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
+	"ovk-im/src/db"
+	db_models "ovk-im/src/models/db"
+	lp_models "ovk-im/src/models/longpoll"
+	"ovk-im/src/repo/chat"
 	"ovk-im/src/transport/endpoints/core"
 
 	"github.com/gin-gonic/gin"
@@ -24,52 +26,111 @@ type MessagesHandler struct {
 	core.BaseHandler
 }
 
+type ForwardPayload struct {
+	OwnerID                int64    `json:"owner_id"`
+	PeerID                 int64    `json:"peer_id"`
+	ConversationMessageIDs []uint64 `json:"conversation_message_ids"`
+	MessageIDs             []uint64 `json:"message_ids"`
+	IsReply                bool     `json:"is_reply"`
+}
+
+type MultiPeerResponse struct {
+	PeerID                int64      `json:"peer_id"`
+	MessageID             uint64     `json:"message_id,omitempty"`
+	ConversationMessageID uint64     `json:"conversation_message_id,omitempty"`
+	Error                 *core.VKError `json:"error,omitempty"`
+}
+
+var reInvisibleSpaces = regexp.MustCompile(`[\s\x{200b}\x{feff}\x{00a0}\x{200c}\x{200d}]+`)
+
 func Send(c *gin.Context, r *core.BaseHandler) {
-	var peerID int64
 	val, exists := c.Get("userID")
 	if !exists || val == nil {
+		r.Reject(c, 15, "Access denied: Unauthorized")
 		return
 	}
-	currentUserID := val.(int64)
-
-	if uID := c.DefaultQuery("user_id", c.PostForm("user_id")); uID != "" {
-		id, _ := strconv.ParseInt(uID, 10, 64)
-		peerID = id
-	} else if cID := c.DefaultQuery("chat_id", c.PostForm("chat_id")); cID != "" {
-		id, _ := strconv.ParseInt(cID, 10, 64)
-		peerID = 2000000000 + id
-	} else if pID := c.DefaultQuery("peer_id", c.PostForm("peer_id")); pID != "" {
-		peerID, _ = strconv.ParseInt(pID, 10, 64)
-	}
-
-	if peerID == 0 {
-		r.Reject(c, 100, "One of the parameters is missing: user_id, chat_id or peer_id")
+	currentUserID, ok := val.(int64)
+	if !ok || currentUserID == 0 {
+		r.Reject(c, 15, "Access denied: Invalid user session")
 		return
 	}
 
-	internalChatID := chat.GetInternalChatID(peerID, currentUserID)
-	isGroupChat := strings.HasPrefix(internalChatID, "c")
-
-	// ------------------------------------
-
-	message := c.DefaultQuery("message", c.PostForm("message"))
-	attachment := c.DefaultQuery("attachment", c.PostForm("attachment"))
-	randomIDStr := c.DefaultQuery("random_id", c.PostForm("random_id"))
-	if randomIDStr == "" {
-		randomIDStr = c.DefaultQuery("guid", c.PostForm("guid"))
+	groupID := r.GetInt64(c, "group_id", 0)
+	senderID := currentUserID
+	if groupID > 0 {
+		senderID = -groupID
 	}
-	replyToStr := c.DefaultQuery("reply_to", c.PostForm("reply_to"))
-	forwardMessagesRaw := c.DefaultQuery("forward_messages", c.PostForm("forward_messages"))
-	forwardRaw := c.DefaultQuery("forward", c.PostForm("forward"))
+
+	rawMessage := r.Get(c, "message")
+	cleanMessage := strings.TrimSpace(reInvisibleSpaces.ReplaceAllString(rawMessage, " "))
+	message := cleanMessage
+
+	attachment := r.Get(c, "attachment")
+	stickerID := r.GetInt64(c, "sticker_id", 0)
+
+	var attachParts []string
+	if attachment != "" {
+		for _, p := range strings.Split(attachment, ",") {
+			if trimmed := strings.TrimSpace(p); trimmed != "" {
+				attachParts = append(attachParts, trimmed)
+			}
+		}
+	}
+
+	stickerCount := 0
+	otherAttachCount := 0
+
+	for _, part := range attachParts {
+		if strings.HasPrefix(part, "sticker") {
+			stickerCount++
+		} else {
+			otherAttachCount++
+		}
+	}
+
+	if stickerID > 0 {
+		stickerCount++
+	}
+
+	if stickerCount > 0 {
+		if stickerCount > 1 {
+			r.Reject(c, 100, "Only one sticker can be sent per message")
+			return
+		}
+
+		if otherAttachCount > 0 {
+			r.Reject(c, 100, "Stickers cannot be sent with other attachments")
+			return
+		}
+
+		if message != "" {
+			r.Reject(c, 100, "Stickers cannot be sent with text")
+			return
+		}
+
+		if forwardMessagesRaw != "" {
+			r.Reject(c, 100, "Stickers cannot be sent with forwarded messages")
+			return
+		}
+
+		if stickerID > 0 {
+			attachment = fmt.Sprintf("sticker%d", stickerID)
+		}
+	}
+
+	if attachment != "" && !core.IsValidAttachments(attachment) {
+		r.Reject(c, 100, "Invalid attachment format")
+		return
+	}
+
+	forwardMessagesRaw := r.Get(c, "forward_messages")
+	if forwardMessagesRaw == "" {
+		forwardMessagesRaw = r.Get(c, "fwd_messages")
+	}
+	forwardRaw := r.Get(c, "forward")
+	replyToStr := r.Get(c, "reply_to")
 
 	if forwardRaw != "" && forwardMessagesRaw == "" {
-		type ForwardPayload struct {
-			OwnerID                int64    `json:"owner_id"`
-			PeerID                 int64    `json:"peer_id"`
-			ConversationMessageIDs []uint64 `json:"conversation_message_ids"`
-			MessageIDs             []uint64 `json:"message_ids"`
-			IsReply                bool     `json:"is_reply"`
-		}
 		var fwdPayload ForwardPayload
 		if err := json.Unmarshal([]byte(forwardRaw), &fwdPayload); err == nil {
 			if fwdPayload.IsReply && replyToStr == "" {
@@ -88,143 +149,238 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 				} else if len(fwdPayload.ConversationMessageIDs) > 0 {
 					srcPeerID := fwdPayload.PeerID
 					if srcPeerID == 0 {
-						srcPeerID = peerID
+						srcPeerID = r.GetPeerID(c)
 					}
-					srcChatID := chat.GetInternalChatID(srcPeerID, currentUserID)
+					srcChatID := chat.GetInternalChatID(srcPeerID, senderID)
+
 					var globalIDs []uint64
-					dbx.Instance.Model(&db_models.Message{}).
-						Where("chat_id = ? AND local_id IN ?", srcChatID, fwdPayload.ConversationMessageIDs).
-						Order("local_id ASC").
-						Pluck("id", &globalIDs)
-					if len(globalIDs) > 0 {
-						var idStrs []string
-						for _, id := range globalIDs {
-							idStrs = append(idStrs, strconv.FormatUint(id, 10))
-						}
-						forwardMessagesRaw = strings.Join(idStrs, ",")
-					} else {
-						var idStrs []string
-						for _, id := range fwdPayload.ConversationMessageIDs {
-							idStrs = append(idStrs, strconv.FormatUint(id, 10))
-						}
-						forwardMessagesRaw = strings.Join(idStrs, ",")
+					q := db.Instance.Model(&db_models.Message{}).
+						Where("chat_id = ? AND local_id IN ?", srcChatID, fwdPayload.ConversationMessageIDs)
+					q = db_models.BuildVisibilityFilter(q, srcChatID, senderID)
+					q.Order("local_id ASC").Pluck("id", &globalIDs)
+
+					if len(globalIDs) != len(fwdPayload.ConversationMessageIDs) {
+						r.Reject(c, 917, "You don't have permission to forward one or more of these messages")
+						return
 					}
+
+					var idStrs []string
+					for _, id := range globalIDs {
+						idStrs = append(idStrs, strconv.FormatUint(id, 10))
+					}
+					forwardMessagesRaw = strings.Join(idStrs, ",")
 				}
 			}
 		}
 	}
 
-	// Message, Attachment, Reply or Forward
 	if message == "" && attachment == "" && replyToStr == "" && forwardMessagesRaw == "" {
-		r.Reject(c, 100, "One of the parameters is missing: message, attachment, reply_to or forward_messages")
+		r.Reject(c, 100, "Message text is empty or invalid")
 		return
 	}
 
-	// Message
 	if len(message) > 9000 {
 		r.Reject(c, 914, "Message is too long")
 		return
 	}
 
-	// Attachment
-	if attachment != "" {
-		if !core.IsValidAttachments(attachment) {
-			r.Reject(c, 100, "Invalid attachment format")
-			return
-		}
-	}
-
-	// RandomID / Guid
-	var randomID int64
-	if randomIDStr != "" {
-		randomID, _ = strconv.ParseInt(randomIDStr, 10, 64)
-	} else {
-		randomID = rand.Int63()
-	}
-
-	if randomID != 0 {
-		redisKey := fmt.Sprintf("rid:%d:%d:%d", currentUserID, peerID, randomID)
-		oldMsgID, err := r.LPRepo.Client.Get(c.Request.Context(), redisKey).Result()
-		if err == nil && oldMsgID != "" {
-			mID, _ := strconv.ParseUint(oldMsgID, 10, 64)
-			c.JSON(http.StatusOK, gin.H{
-				"response": mID,
-			})
-			return
-		}
-	}
-
-	// ReplyTo
-	var replyTo uint64
-	if replyToStr != "" {
-		id, _ := strconv.ParseUint(replyToStr, 10, 64)
-		replyTo = id
-	}
-
-	// Forward
 	if forwardMessagesRaw != "" {
-		ids := strings.Split(forwardMessagesRaw, ",")
-		if len(ids) > 100 {
+		rawIDs := strings.Split(forwardMessagesRaw, ",")
+		if len(rawIDs) > 100 {
 			r.Reject(c, 100, "Too many forward_messages")
 			return
 		}
+
+		var validForwardIDs []uint64
+		for _, rawID := range rawIDs {
+			id, err := strconv.ParseUint(strings.TrimSpace(rawID), 10, 64)
+			if err != nil || id == 0 {
+				r.Reject(c, 100, "Invalid ID in forward_messages")
+				return
+			}
+			validForwardIDs = append(validForwardIDs, id)
+		}
+
+		type msgRef struct {
+			ID     uint64 `gorm:"column:id"`
+			ChatID string `gorm:"column:chat_id"`
+		}
+		var refs []msgRef
+		db.Instance.Model(&db_models.Message{}).
+			Select("id, chat_id").
+			Where("id IN ?", validForwardIDs).
+			Scan(&refs)
+
+		if len(refs) != len(validForwardIDs) {
+			r.Reject(c, 917, "You don't have permission to forward one or more of these messages")
+			return
+		}
+
+		chatToIDs := make(map[string][]uint64)
+		for _, ref := range refs {
+			chatToIDs[ref.ChatID] = append(chatToIDs[ref.ChatID], ref.ID)
+		}
+
+		for chID, ids := range chatToIDs {
+			var visibleCount int64
+			subQ := db.Instance.Model(&db_models.Message{}).
+				Where("chat_id = ? AND id IN ?", chID, ids)
+			subQ = db_models.BuildVisibilityFilter(subQ, chID, senderID)
+			subQ.Count(&visibleCount)
+
+			if visibleCount != int64(len(ids)) {
+				r.Reject(c, 917, "You don't have permission to forward one or more of these messages")
+				return
+			}
+		}
 	}
 
-	// ------------------------------------
-	// ПРОВЕРКА ПРАВ: Кто кому может писать
-	// ------------------------------------
+	peerIDsRaw := r.Get(c, "peer_ids")
+	if peerIDsRaw != "" {
+		pIDStrs := strings.Split(peerIDsRaw, ",")
+		if len(pIDStrs) > 25 {
+			r.Reject(c, 913, "Too many recipients")
+			return
+		}
 
-	if currentUserID < 0 && peerID < 0 {
-		r.Reject(c, 100, "Communities cannot send messages to other communities")
+		var results []MultiPeerResponse
+		for _, pStr := range pIDStrs {
+			pID, _ := strconv.ParseInt(strings.TrimSpace(pStr), 10, 64)
+			if pID == 0 {
+				continue
+			}
+
+			randID := rand.Int63()
+			mID, cmID, errCode, errMsg := executeSendMessage(c.Request.Context(), r, pID, senderID, message, attachment, replyToStr, forwardMessagesRaw, randID)
+			if errCode != 0 {
+				results = append(results, MultiPeerResponse{
+					PeerID: pID,
+					Error: &core.VKError{
+						ErrorCode: errCode,
+						ErrorMsg:  errMsg,
+					},
+				})
+			} else {
+				results = append(results, MultiPeerResponse{
+					PeerID:                pID,
+					MessageID:             mID,
+					ConversationMessageID: cmID,
+				})
+			}
+		}
+
+		c.JSON(http.StatusOK, gin.H{"response": results})
 		return
+	}
+
+	peerID := r.GetPeerID(c)
+	if peerID == 0 {
+		r.Reject(c, 100, "One of the parameters specified was missing or invalid: no recipient")
+		return
+	}
+
+	randomID := r.GetInt64(c, "random_id", 0)
+	if randomID == 0 {
+		randomID = r.GetInt64(c, "guid", 0)
+	}
+	if randomID == 0 {
+		randomID = rand.Int63()
+	}
+
+	finalMessageID, _, errCode, errMsg := executeSendMessage(c.Request.Context(), r, peerID, senderID, message, attachment, replyToStr, forwardMessagesRaw, randomID)
+	if errCode != 0 {
+		r.Reject(c, errCode, errMsg)
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"response": finalMessageID})
+}
+
+func executeSendMessage(
+	ctx context.Context,
+	r *core.BaseHandler,
+	peerID int64,
+	senderID int64,
+	message string,
+	attachment string,
+	replyToStr string,
+	forwardMessagesRaw string,
+	randomID int64,
+) (mID uint64, cmID uint64, errCode int, errMsg string) {
+	internalChatID := chat.GetInternalChatID(peerID, senderID)
+	isGroupChat := strings.HasPrefix(internalChatID, "c")
+
+	if senderID < 0 && peerID < 0 {
+		return 0, 0, 100, "Communities cannot send messages to other communities"
 	}
 
 	switch {
 	case isGroupChat:
-		// ПОЛУЧАТЕЛЬ: ЧАТ
-		inChat, err := chat.IsUserInChat(nil, internalChatID, currentUserID)
+		inChat, err := chat.IsUserInChat(nil, internalChatID, senderID)
 		if err != nil || !inChat {
-			r.Reject(c, 917, "You don't have access to this chat")
-			return
+			return 0, 0, 917, "You don't have access to this chat"
 		}
-
-	case peerID < 0:
-		// ПОЛУЧАТЕЛЬ: СООБЩЕСТВО
-		// Тут обычно проверяется, не забанило ли сообщество юзера,
-		// но как минимум, мы разрешаем юзеру сюда писать.
-		if currentUserID < 0 { // Дублирующая проверка на всякий случай
-			r.Reject(c, 100, "Communities cannot send messages to other communities")
-			return
+	case peerID > 0 && senderID < 0:
+		var exists bool
+		db.Instance.Model(&db_models.Message{}).
+			Select("count(*) > 0").
+			Where("chat_id = ? AND from_id = ?", internalChatID, peerID).
+			Scan(&exists)
+		if !exists {
+			return 0, 0, 901, "Can't send messages for users without permission"
 		}
+	}
 
-	case peerID > 0:
-		// ПОЛУЧАТЕЛЬ: ПОЛЬЗОВАТЕЛЬ (личка)
-
-		// Если пишет СООБЩЕСТВО пользователю
-		if currentUserID < 0 {
-			var exists bool
-			dbx.Instance.Model(&db_models.Message{}).
-				Select("count(*) > 0").
-				Where("chat_id = ? AND from_id = ?", internalChatID, peerID).
-				Scan(&exists)
-
-			if !exists {
-				r.Reject(c, 901, "Can't send messages for users without permission")
-				return
+	redisKey := fmt.Sprintf("rid:%d:%d:%d", senderID, peerID, randomID)
+	if randomID != 0 {
+		existingVal, err := r.LPRepo.Client.Get(ctx, redisKey).Result()
+		if err == nil && existingVal != "" {
+			if existingVal == "processing" {
+				return 0, 0, 100, "Message with this random_id is currently being processed"
+			}
+			if cachedMID, pErr := strconv.ParseUint(existingVal, 10, 64); pErr == nil {
+				return cachedMID, cachedMID, 0, ""
 			}
 		}
 
-	default:
-		r.Reject(c, 100, "Invalid peer_id")
-		return
+		acquired, err := r.LPRepo.Client.SetNX(ctx, redisKey, "processing", 15*time.Second).Result()
+		if err != nil || !acquired {
+			return 0, 0, 100, "Message with this random_id is already being processed"
+		}
 	}
 
-	// ------------------------------------------------
+	var isSuccess bool
+	defer func() {
+		if !isSuccess && randomID != 0 {
+			_ = r.LPRepo.Client.Del(context.Background(), redisKey).Err()
+		}
+	}()
+
+	var replyTo uint64
+	if replyToStr != "" {
+		id, err := strconv.ParseUint(replyToStr, 10, 64)
+		if err != nil || id == 0 {
+			return 0, 0, 100, "Invalid reply_to parameter"
+		}
+
+		var replyExists bool
+		q := db.Instance.Model(&db_models.Message{}).
+			Select("count(*) > 0").
+			Where("chat_id = ? AND (local_id = ? OR id = ?)", internalChatID, id, id)
+		q = db_models.BuildVisibilityFilter(q, internalChatID, senderID)
+		q.Scan(&replyExists)
+
+		if !replyExists {
+			return 0, 0, 100, "Replied message not found in this chat or access denied"
+		}
+		replyTo = id
+	}
 
 	var finalLocalID uint64
 	var finalMessageID uint64
-	err := dbx.Instance.Transaction(func(tx *gorm.DB) error {
-		localID, err := chat.NextLocalID(tx, internalChatID, currentUserID)
+
+	err := db.Instance.Transaction(func(tx *gorm.DB) error {
+		localID, err := chat.NextLocalID(tx, internalChatID, senderID)
 		if err != nil {
 			return err
 		}
@@ -233,13 +389,13 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 		if !isGroupChat {
 			tx.FirstOrCreate(&db_models.ConversationMember{
 				InternalChatID: internalChatID,
-				UserID:         currentUserID,
+				UserID:         senderID,
 				JoinedAt:       time.Now(),
 				IsAdmin:        true,
 			})
-			chat.EnsureMemberPeriod(tx, internalChatID, currentUserID, 1)
+			chat.EnsureMemberPeriod(tx, internalChatID, senderID, 1)
 
-			if peerID != currentUserID {
+			if peerID != senderID {
 				tx.FirstOrCreate(&db_models.ConversationMember{
 					InternalChatID: internalChatID,
 					UserID:         peerID,
@@ -255,7 +411,7 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 		newMessage := db_models.Message{
 			ChatID:          internalChatID,
 			LocalID:         localID,
-			FromID:          currentUserID,
+			FromID:          senderID,
 			Text:            db_models.EncryptedJSON(message),
 			Attachments:     db_models.EncryptedJSON(finalAttach),
 			ReplyTo:         &replyTo,
@@ -276,14 +432,13 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 		}
 
 		if err := tx.Model(&db_models.ConversationMember{}).
-			Where("internal_chat_id = ?", internalChatID).
-			Update("last_message_id", localID).Error; err != nil {
+			Where("internal_chat_id = ? AND user_id = ?", internalChatID, senderID).
+			Updates(map[string]interface{}{
+				"last_message_id": localID,
+				"last_read_id":    localID,
+			}).Error; err != nil {
 			return err
 		}
-
-		tx.Model(&db_models.ConversationMember{}).
-			Where("internal_chat_id = ? AND user_id = ?", internalChatID, currentUserID).
-			Update("last_read_id", localID)
 
 		if message != "" {
 			indexes := r.SearchRepo.GenerateBlindIndexes(newMessage.ID, internalChatID, message)
@@ -300,23 +455,22 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 	if err != nil {
 		switch err {
 		case chat.ErrGroupNoPermission:
-			r.Reject(c, 901, "Can't send messages for users without permission")
+			return 0, 0, 901, "Can't send messages for users without permission"
 		case chat.ErrChatNotFound:
-			r.Reject(c, 917, "Chat not found or access denied")
+			return 0, 0, 917, "Chat not found or access denied"
 		default:
-			r.Reject(c, 10, "Internal server error: "+err.Error())
+			log.Printf("[Messages.Send Error] sender=%d, peer=%d: %v", senderID, peerID, err)
+			return 0, 0, 10, "Internal server error"
 		}
-		return
 	}
 
+	isSuccess = true
 	if randomID != 0 {
-		redisKey := fmt.Sprintf("rid:%d:%d:%d", currentUserID, peerID, randomID)
-		r.LPRepo.Client.Set(c.Request.Context(), redisKey, finalMessageID, 24*time.Hour)
+		r.LPRepo.Client.Set(ctx, redisKey, finalMessageID, 24*time.Hour)
 	}
 
-	// --- ПОДГОТОВКА LONGPOLL СОБЫТИЯ ---
 	lpAttach := lp_models.NewLPAttachments(attachment)
-	lpAttach.From = strconv.FormatInt(currentUserID, 10)
+	lpAttach.From = strconv.FormatInt(senderID, 10)
 	lpAttach.CMID = strconv.FormatUint(finalLocalID, 10)
 	if replyTo != 0 {
 		lpAttach.ReplyTo = strconv.FormatUint(replyTo, 10)
@@ -324,7 +478,6 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 	if forwardMessagesRaw != "" {
 		lpAttach.Fwd = forwardMessagesRaw
 	}
-	// TODO: Добавить проверку на emoji
 
 	lpEvent := lp_models.NewMessageEvent{
 		MessageID:   finalMessageID,
@@ -339,37 +492,42 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 
 	var recipients []int64
 	if isGroupChat {
-		dbx.Instance.Model(&db_models.ConversationMember{}).
+		db.Instance.Model(&db_models.ConversationMember{}).
 			Where("internal_chat_id = ? AND left_at IS NULL", internalChatID).
 			Pluck("user_id", &recipients)
 	} else {
-		recipients = append(recipients, currentUserID)
-		if peerID != currentUserID {
+		recipients = append(recipients, senderID)
+		if peerID != senderID {
 			recipients = append(recipients, peerID)
 		}
 	}
 
-	go func(rcps []int64, event lp_models.NewMessageEvent, currentID int64) {
-		ctx := context.Background()
+	go func(rcps []int64, event lp_models.NewMessageEvent, sID int64) {
+		defer func() {
+			if rec := recover(); rec != nil {
+				log.Printf("[Messages.Send Panic] %v", rec)
+			}
+		}()
+
+		bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
 
 		for _, uid := range rcps {
 			userEvent := event
 			userEvent.Flags = lp_models.MessageFlags{Value: event.Flags.Value}
 
-			if uid == currentID {
+			if uid == sID {
 				userEvent.Flags.Add(lp_models.FlagOutbox)
 			} else {
 				userEvent.Flags.Add(lp_models.FlagUnread)
 			}
 
-			_, _, err := r.LPRepo.PushEvent(ctx, uid, "new_msg", userEvent)
-			if err == nil {
+			_, _, pushErr := r.LPRepo.PushEvent(bgCtx, uid, "new_msg", userEvent)
+			if pushErr == nil {
 				r.Broadcaster.Notify(uid)
 			}
 		}
-	}(recipients, lpEvent, currentUserID)
+	}(recipients, lpEvent, senderID)
 
-	c.JSON(http.StatusOK, gin.H{
-		"response": finalMessageID,
-	})
+	return finalMessageID, finalLocalID, 0, ""
 }
