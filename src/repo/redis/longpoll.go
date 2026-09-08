@@ -200,8 +200,8 @@ func (r *Repo) PushEphemeralEvent(ctx context.Context, userID int64, eventType s
 
 	pipe := r.Client.Pipeline()
 	pipe.ZAdd(ctx, eventsKey, redis.Z{Score: float64(newTS), Member: stored})
-	pipe.ZRemRangeByRank(ctx, eventsKey, 0, -51)
-	pipe.Expire(ctx, eventsKey, 10*time.Minute)
+	pipe.ZRemRangeByRank(ctx, eventsKey, 0, -201)
+	pipe.Expire(ctx, eventsKey, 48*time.Hour)
 	pipe.Expire(ctx, tsKey, 48*time.Hour)
 
 	_, err := pipe.Exec(ctx)

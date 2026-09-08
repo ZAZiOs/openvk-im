@@ -274,7 +274,7 @@ func JoinChatByInviteLink(c *gin.Context, r *core.BaseHandler) {
 	if err == nil {
 		lpAttach := lp_models.LPAttachments{
 			Source: "chat_invite_user_by_link",
-			From:   strconv.FormatInt(currentUserID, 10),
+			From:   currentUserID,
 			Emoji:  false,
 		}
 

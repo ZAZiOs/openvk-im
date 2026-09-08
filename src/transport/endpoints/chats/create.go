@@ -76,7 +76,7 @@ func CreateChat(c *gin.Context, r *core.BaseHandler) {
 		Source: "chat_create",
 		Mid:    strconv.FormatInt(currentUserID, 10),
 		Emoji:  hasEmoji,
-		From:   strconv.FormatInt(currentUserID, 10),
+		From:   currentUserID,
 	}
 
 	baseEvent := lp_models.NewMessageEvent{

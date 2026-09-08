@@ -61,7 +61,7 @@ func SetChatPhoto(c *gin.Context, r *core.BaseHandler) {
 	if err == nil {
 		lpAttach := lp_models.LPAttachments{
 			Source: "chat_photo_update",
-			From:   strconv.FormatInt(currentUserID, 10),
+			From:   currentUserID,
 			Mid:    strconv.FormatInt(currentUserID, 10),
 		}
 
@@ -157,7 +157,7 @@ func DeleteChatPhoto(c *gin.Context, r *core.BaseHandler) {
 	if err == nil {
 		lpAttach := lp_models.LPAttachments{
 			Source: "chat_photo_remove",
-			From:   strconv.FormatInt(currentUserID, 10),
+			From:   currentUserID,
 			Mid:    strconv.FormatInt(currentUserID, 10),
 		}
 

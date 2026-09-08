@@ -34,14 +34,15 @@ func GetLongPollServer(c *gin.Context, r *core.BaseHandler) {
 		return
 	}
 
-	ts, _ := r.LPRepo.GetUserTS(ctx, userID)
-	pts, _ := r.LPRepo.GetUserPTS(ctx, userID)
+	ts, _ := r.LPRepo.GetUserTS(ctx, subjectID)
+	pts, _ := r.LPRepo.GetUserPTS(ctx, subjectID)
 
 	if ts == 0 {
-		ts = uint64(time.Now().Unix())
-		err := r.LPRepo.SetUserTS(ctx, subjectID, ts)
-		if err != nil {
-			fmt.Printf("Redis error setting TS: %v\n", err)
+		newTS, incrErr := r.LPRepo.Client.Incr(ctx, fmt.Sprintf("im:lp:ts:%d", subjectID)).Result()
+		if incrErr == nil {
+			ts = uint64(newTS)
+		} else {
+			fmt.Printf("Redis error initializing TS: %v\n", incrErr)
 		}
 	}
 

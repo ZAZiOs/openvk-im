@@ -152,7 +152,7 @@ func SendAction(c *gin.Context, r *core.BaseHandler) {
 
 	lpAttach := lp_models.LPAttachments{
 		Source: actionType,
-		From:   strconv.FormatInt(currentUserID, 10),
+		From:   currentUserID,
 	}
 	if actionMid != 0 {
 		lpAttach.Mid = strconv.FormatInt(actionMid, 10)

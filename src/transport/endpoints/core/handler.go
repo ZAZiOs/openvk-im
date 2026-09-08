@@ -544,7 +544,7 @@ func (r *BaseHandler) SendUpdateEvent(peerID int64, localID uint64, text string,
 
 	go func(pID int64, lID uint64, txt, attach string, sID int64, chatId string) {
 		lpAttach := lp_models.NewLPAttachments(attach)
-		lpAttach.From = strconv.FormatInt(sID, 10)
+		lpAttach.From = sID
 
 		updateEvent := lp_models.UpdateMessageEvent{
 			MessageID:   lID,

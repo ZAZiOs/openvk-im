@@ -98,8 +98,8 @@ func SetChatModerator(c *gin.Context, r *core.BaseHandler) {
 			lpAttach := lp_models.LPAttachments{
 				Source: "chat_moderator_add",
 				Mid:    strconv.FormatInt(targetUserID, 10),
-				From:   strconv.FormatInt(currentUserID, 10),
-				CMID:   strconv.FormatUint(msg.LocalID, 10),
+				From:   currentUserID,
+				CMID:   msg.LocalID,
 			}
 
 			baseEvent := lp_models.NewMessageEvent{
@@ -217,8 +217,8 @@ func RemoveChatModerator(c *gin.Context, r *core.BaseHandler) {
 			lpAttach := lp_models.LPAttachments{
 				Source: "chat_moderator_remove",
 				Mid:    strconv.FormatInt(targetUserID, 10),
-				From:   strconv.FormatInt(currentUserID, 10),
-				CMID:   strconv.FormatUint(msg.LocalID, 10),
+				From:   currentUserID,
+				CMID:   msg.LocalID,
 			}
 
 			baseEvent := lp_models.NewMessageEvent{

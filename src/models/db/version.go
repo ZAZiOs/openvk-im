@@ -15,7 +15,7 @@ type ApiV struct {
 func ParseApiV(vStr string) ApiV {
 	vStr = strings.TrimSpace(vStr)
 	if vStr == "" {
-		vStr = "5.9999" // same as in ovk
+		vStr = "5.9999"
 	}
 
 	parts := strings.Split(vStr, ".")
@@ -27,11 +27,6 @@ func ParseApiV(vStr string) ApiV {
 	minor := 9999
 	if len(parts) > 1 {
 		if m, err := strconv.Atoi(parts[1]); err == nil {
-			if len(parts[1]) == 2 {
-				m = m * 10
-			} else if len(parts[1]) == 1 {
-				m = m * 100
-			}
 			minor = m
 		}
 	}
@@ -43,30 +38,17 @@ func ParseApiV(vStr string) ApiV {
 	}
 }
 
-// IsOlderThan returns true if the current version is strictly older than major.minor.
-// Supports both 2-digit (e.g. 5, 80) and 3-digit (e.g. 5, 800) target minor versions.
 func (v ApiV) IsOlderThan(major, minor int) bool {
-	if v.Major < major {
-		return true
+	if v.Major != major {
+		return v.Major < major
 	}
-	if v.Major > major {
-		return false
-	}
-
-	targetMinor := minor
-	if targetMinor < 100 && targetMinor > 0 {
-		targetMinor = targetMinor * 10
-	}
-
-	return v.Minor < targetMinor
+	return v.Minor < minor
 }
 
-// IsAtLeast returns true if the current version is at least major.minor (>= major.minor).
 func (v ApiV) IsAtLeast(major, minor int) bool {
 	return !v.IsOlderThan(major, minor)
 }
 
-// String returns the raw version string.
 func (v ApiV) String() string {
 	if v.Raw != "" {
 		return v.Raw

@@ -98,7 +98,7 @@ func EditChat(c *gin.Context, r *core.BaseHandler) {
 		Source: "chat_title_update",
 		Mid:    strconv.FormatInt(currentUserID, 10),
 		Emoji:  hasEmoji,
-		From:   strconv.FormatInt(currentUserID, 10),
+		From:   currentUserID,
 	}
 	baseMsgEvent := lp_models.NewMessageEvent{
 		MessageID:   uint64(msg.ID),

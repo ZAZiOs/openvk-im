@@ -52,8 +52,8 @@ func AddChatUser(c *gin.Context, r *core.BaseHandler) {
 		lpAttach := lp_models.LPAttachments{
 			Source: "chat_invite_user",
 			Mid:    strconv.FormatInt(userID, 10),
-			From:   strconv.FormatInt(currentUserID, 10),
-			CMID:   strconv.FormatUint(msg.LocalID, 10),
+			From:   currentUserID,
+			CMID:   msg.LocalID,
 			Emoji:  hasEmoji,
 		}
 
@@ -182,8 +182,8 @@ func RemoveChatUser(c *gin.Context, r *core.BaseHandler) {
 			lpAttach := lp_models.LPAttachments{
 				Source: "chat_kick_user",
 				Mid:    strconv.FormatInt(userID, 10),
-				From:   strconv.FormatInt(currentUserID, 10),
-				CMID:   strconv.FormatUint(msg.LocalID, 10),
+				From:   currentUserID,
+				CMID:   msg.LocalID,
 				Emoji:  hasEmoji,
 			}
 

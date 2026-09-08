@@ -76,7 +76,7 @@ func Pin(c *gin.Context, r *core.BaseHandler) {
 		members, _ := chat.GetActiveMemberIDs(nil, chatID)
 		lpAttach := lp_models.LPAttachments{
 			Source: "chat_pin_message",
-			From:   strconv.FormatInt(currentUserID, 10),
+			From:   currentUserID,
 			Mid:    strconv.FormatInt(msg.FromID, 10),
 		}
 
@@ -158,7 +158,7 @@ func Unpin(c *gin.Context, r *core.BaseHandler) {
 		members, _ := chat.GetActiveMemberIDs(nil, chatID)
 		lpAttach := lp_models.LPAttachments{
 			Source: "chat_unpin_message",
-			From:   strconv.FormatInt(currentUserID, 10),
+			From:   currentUserID,
 		}
 
 		baseEvent := lp_models.NewMessageEvent{

@@ -38,7 +38,8 @@ func GetLongPollHistory(c *gin.Context, r *core.BaseHandler) {
 			version = ver
 		}
 	}
-	mode, _ := strconv.Atoi(c.DefaultQuery("mode", "2"))
+	modeRaw, _ := strconv.ParseUint(c.DefaultQuery("mode", "2"), 10, 32)
+	mode := uint32(modeRaw)
 
 	lpCfg := lp_models.LPConfig{
 		Version:   version,

@@ -5,6 +5,7 @@ import (
 	db_models "ovk-im/src/models/db"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Envelope struct {
@@ -18,15 +19,16 @@ type Envelope struct {
 
 type LPConfig struct {
 	Version   int
-	Mode      int
+	Mode      uint32
 	Described int
 }
 
-func (c LPConfig) HasAttachments() bool { return (c.Mode & 2) != 0 }
-func (c LPConfig) HasExtended() bool    { return (c.Mode & 8) != 0 }
-func (c LPConfig) HasPTS() bool         { return (c.Mode & 32) != 0 }
-func (c LPConfig) HasExtra() bool       { return (c.Mode & 64) != 0 }
-func (c LPConfig) ReturnRandomID() bool { return (c.Mode & 128) != 0 }
+func (c LPConfig) HasAttachments() bool     { return (c.Mode & 2) != 0 }
+func (c LPConfig) HasExtended() bool        { return (c.Mode & 8) != 0 }
+func (c LPConfig) HasPTS() bool             { return (c.Mode & 32) != 0 }
+func (c LPConfig) HasExtra() bool           { return (c.Mode & 64) != 0 }
+func (c LPConfig) ReturnRandomID() bool     { return (c.Mode & 128) != 0 }
+func (c LPConfig) ReturnCustomFields() bool { return (c.Mode & 256) != 0 }
 
 type VKEvent interface {
 	ToSlice(cfg LPConfig) interface{}
@@ -57,12 +59,11 @@ type LPAttachments struct {
 	Source  string
 	Mid     string
 	Emoji   bool
-	From    string
-	ReplyTo string
+	From    int64
+	ReplyTo uint64
 	Fwd     string
-	CMID    string
+	CMID    uint64
 }
-
 type LPAttachmentItem struct {
 	Type string
 	Data string
@@ -84,18 +85,19 @@ func (a LPAttachments) ToMap() map[string]interface{} {
 		res["source_mid"] = a.Mid
 	}
 	if a.Emoji {
-		res["emoji"] = "1"
+		res["emoji"] = 1
 	}
-	if a.From != "" {
+	if a.From != 0 {
 		res["from"] = a.From
 	}
-	if a.ReplyTo != "" {
+	if a.ReplyTo != 0 {
 		res["reply_to"] = a.ReplyTo
+		res["reply"] = a.ReplyTo
 	}
 	if a.Fwd != "" {
 		res["fwd"] = a.Fwd
 	}
-	if a.CMID != "" {
+	if a.CMID != 0 {
 		res["conversation_message_id"] = a.CMID
 		res["cmid"] = a.CMID
 	}
@@ -285,14 +287,22 @@ type NewMessageEvent struct {
 }
 
 func (e NewMessageEvent) ToSlice(cfg LPConfig) interface{} {
-	var peerID int64
-	if cfg.Version == 0 && e.PeerID < 0 {
-		// Старый формат для сообществ в v0: 1000000000 + group_id
-		// e.PeerID у нас отрицательный для сообществ
-		peerID = 1000000000 + (-e.PeerID)
-	} else {
-		// В v1+ или для юзеров/чатов используем как есть
-		peerID = e.PeerID
+	peerID := e.PeerID
+	switch {
+	case cfg.Version == 0 && peerID < 0:
+		peerID = 1000000000 + (-peerID)
+	case cfg.Version == 1 && peerID > 2000000000:
+		peerID = peerID - 2000000000
+	}
+
+	extraMap := map[string]interface{}{}
+	if e.Attachments != nil {
+		extraMap = e.Attachments.ToMap()
+	}
+
+	if !cfg.ReturnCustomFields() {
+		delete(extraMap, "cmid")
+		delete(extraMap, "conversation_message_id")
 	}
 
 	if cfg.Described == 2 {
@@ -303,46 +313,98 @@ func (e NewMessageEvent) ToSlice(cfg LPConfig) interface{} {
 			"flags":      e.Flags.Value,
 			"peer_id":    peerID,
 			"timestamp":  e.Timestamp,
-			"subject":    "",
 			"text":       e.Text,
 		}
 
-		if cfg.HasAttachments() {
-			if e.Attachments != nil {
-				res["attachments"] = e.Attachments.ToMap()
-			} else {
-				res["attachments"] = map[string]interface{}{}
-			}
+		if cfg.Version < 7 {
+			res["subject"] = ""
+		} else {
+			res["conversation_message_id"] = e.MinorID
 		}
 
-		if cfg.ReturnRandomID() {
+		if cfg.HasAttachments() {
+			res["attachments"] = extraMap
+		}
+
+		if cfg.ReturnRandomID() || cfg.Version >= 7 {
 			res["random_id"] = e.RandomID
+		}
+
+		if cfg.ReturnCustomFields() {
+			res["custom"] = map[string]interface{}{
+				"minor_id": e.MinorID,
+			}
 		}
 
 		return res
 	}
 
-	res := []interface{}{
-		4,             // code
-		e.MessageID,   // $message_id
-		e.Flags.Value, // $flags
-		peerID,        // $from_id / $peer_id
-		e.Timestamp,   // $timestamp
-		"",            // $subject (Имя беседы / Email, необязательно)
-		e.Text,        // $text
-	}
-
-	// mode=2:
-	if cfg.HasAttachments() {
-		if e.Attachments == nil {
-			res = append(res, map[string]interface{}{})
-		} else {
-			res = append(res, e.Attachments.ToMap())
+	if cfg.Version == 0 {
+		res := []interface{}{
+			4,
+			e.MessageID,
+			e.Flags.Value,
+			e.MinorID,
+			peerID,
+			e.Timestamp,
+			"",
+			e.Text,
 		}
+		if cfg.HasAttachments() {
+			res = append(res, extraMap)
+		}
+		if cfg.ReturnRandomID() {
+			res = append(res, e.RandomID)
+		}
+		if cfg.ReturnCustomFields() {
+			res = append(res, map[string]interface{}{"minor_id": e.MinorID})
+		}
+		return res
 	}
 
-	if cfg.ReturnRandomID() {
-		res = append(res, e.RandomID)
+	if cfg.Version < 4 {
+		res := []interface{}{
+			4,
+			e.MessageID,
+			e.Flags.Value,
+			peerID,
+			e.Timestamp,
+			"",
+			e.Text,
+		}
+		if cfg.HasAttachments() {
+			res = append(res, extraMap)
+		}
+		if cfg.ReturnRandomID() {
+			res = append(res, e.RandomID)
+		}
+		if cfg.ReturnCustomFields() {
+			res = append(res, map[string]interface{}{"minor_id": e.MinorID})
+		}
+		return res
+	}
+
+	titleObj := map[string]interface{}{
+		"title": " ... ",
+	}
+
+	res := []interface{}{
+		4,
+		e.MessageID,
+		e.Flags.Value,
+		peerID,
+		e.Timestamp,
+		e.Text,
+		titleObj,
+		extraMap,
+		e.RandomID,
+		e.MinorID,
+	}
+
+	if cfg.ReturnCustomFields() {
+		res = append(res, map[string]interface{}{
+			"minor_id": e.MinorID,
+		})
 	}
 
 	return res
@@ -685,6 +747,29 @@ func (e IsDMTypingEvent) ToSlice(cfg LPConfig) interface{} {
 			"flag_info": flag_info,
 		}
 	}
+
+	if cfg.Version >= 3 {
+		code := 63
+		if e.Flags == 2 {
+			code = 64
+		}
+
+		userIDs := []int64{e.UserID}
+		totalCount := 1
+		if e.Flags == 0 {
+			userIDs = []int64{}
+			totalCount = 0
+		}
+
+		return []interface{}{
+			code,
+			e.UserID,
+			userIDs,
+			totalCount,
+			time.Now().Unix(),
+		}
+	}
+
 	return []interface{}{61, e.UserID, e.Flags}
 }
 
@@ -713,7 +798,31 @@ func (e IsChatTypingEvent) ToSlice(cfg LPConfig) interface{} {
 			"flag_info": flag_info,
 		}
 	}
-	return []interface{}{62, e.UserID, e.ChatID, e.Flags}
+
+	if cfg.Version >= 3 {
+		code := 63
+		if e.Flags == 2 {
+			code = 64
+		}
+
+		peerID := int64(2000000000) + e.ChatID
+		userIDs := []int64{e.UserID}
+		totalCount := 1
+		if e.Flags == 0 {
+			userIDs = []int64{}
+			totalCount = 0
+		}
+
+		return []interface{}{
+			code,
+			peerID,
+			userIDs,
+			totalCount,
+			time.Now().Unix(),
+		}
+	}
+
+	return []interface{}{62, e.UserID, e.ChatID}
 }
 
 // v3

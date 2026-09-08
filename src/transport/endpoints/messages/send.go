@@ -35,9 +35,9 @@ type ForwardPayload struct {
 }
 
 type MultiPeerResponse struct {
-	PeerID                int64      `json:"peer_id"`
-	MessageID             uint64     `json:"message_id,omitempty"`
-	ConversationMessageID uint64     `json:"conversation_message_id,omitempty"`
+	PeerID                int64         `json:"peer_id"`
+	MessageID             uint64        `json:"message_id,omitempty"`
+	ConversationMessageID uint64        `json:"conversation_message_id,omitempty"`
 	Error                 *core.VKError `json:"error,omitempty"`
 }
 
@@ -64,6 +64,12 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 	rawMessage := r.Get(c, "message")
 	cleanMessage := strings.TrimSpace(reInvisibleSpaces.ReplaceAllString(rawMessage, " "))
 	message := cleanMessage
+
+	forwardMessagesRaw := r.Get(c, "forward_messages")
+	if forwardMessagesRaw == "" {
+		forwardMessagesRaw = r.Get(c, "fwd_messages")
+	}
+	forwardRaw := r.Get(c, "forward")
 
 	attachment := r.Get(c, "attachment")
 	stickerID := r.GetInt64(c, "sticker_id", 0)
@@ -123,11 +129,6 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 		return
 	}
 
-	forwardMessagesRaw := r.Get(c, "forward_messages")
-	if forwardMessagesRaw == "" {
-		forwardMessagesRaw = r.Get(c, "fwd_messages")
-	}
-	forwardRaw := r.Get(c, "forward")
 	replyToStr := r.Get(c, "reply_to")
 
 	if forwardRaw != "" && forwardMessagesRaw == "" {
@@ -470,10 +471,10 @@ func executeSendMessage(
 	}
 
 	lpAttach := lp_models.NewLPAttachments(attachment)
-	lpAttach.From = strconv.FormatInt(senderID, 10)
-	lpAttach.CMID = strconv.FormatUint(finalLocalID, 10)
+	lpAttach.From = senderID
+	lpAttach.CMID = finalLocalID
 	if replyTo != 0 {
-		lpAttach.ReplyTo = strconv.FormatUint(replyTo, 10)
+		lpAttach.ReplyTo = replyTo
 	}
 	if forwardMessagesRaw != "" {
 		lpAttach.Fwd = forwardMessagesRaw
@@ -493,8 +494,13 @@ func executeSendMessage(
 	var recipients []int64
 	if isGroupChat {
 		db.Instance.Model(&db_models.ConversationMember{}).
-			Where("internal_chat_id = ? AND left_at IS NULL", internalChatID).
+			Where("internal_chat_id = ? AND (left_at IS NULL OR left_at = 0)", internalChatID).
 			Pluck("user_id", &recipients)
+
+		log.Printf("[DEBUG GroupChat] chatID=%s, found recipients=%v", internalChatID, recipients)
+		if len(recipients) == 0 {
+			log.Printf("[ERROR GroupChat] No recipients found for chat %s!", internalChatID)
+		}
 	} else {
 		recipients = append(recipients, senderID)
 		if peerID != senderID {
@@ -512,19 +518,57 @@ func executeSendMessage(
 		bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
+		baseFlags := event.Flags.Value
+		if isGroupChat {
+			baseFlags |= lp_models.FlagChat
+		}
+		if attachment != "" || forwardMessagesRaw != "" || replyTo != 0 {
+			baseFlags |= lp_models.FlagMedia
+		}
+
+		var stopTypingEvent lp_models.VKEvent
+		var stopEventType string
+		if isGroupChat {
+			stopEventType = "is_chat_typing"
+			var chatID int64 = peerID
+			if peerID > 2000000000 {
+				chatID = peerID - 2000000000
+			}
+			stopTypingEvent = &lp_models.IsChatTypingEvent{
+				UserID: sID,
+				ChatID: chatID,
+				Flags:  0,
+			}
+		} else {
+			stopEventType = "is_dm_typing"
+			stopTypingEvent = &lp_models.IsDMTypingEvent{
+				UserID: sID,
+				Flags:  0,
+			}
+		}
+
 		for _, uid := range rcps {
 			userEvent := event
-			userEvent.Flags = lp_models.MessageFlags{Value: event.Flags.Value}
+			userEvent.Flags = lp_models.MessageFlags{Value: baseFlags}
 
 			if uid == sID {
 				userEvent.Flags.Add(lp_models.FlagOutbox)
+				userEvent.PeerID = peerID
 			} else {
 				userEvent.Flags.Add(lp_models.FlagUnread)
+				if isGroupChat {
+					userEvent.PeerID = peerID
+				} else {
+					userEvent.PeerID = sID
+				}
+
+				_ = r.LPRepo.PushEphemeralEvent(bgCtx, uid, stopEventType, stopTypingEvent)
 			}
 
 			_, _, pushErr := r.LPRepo.PushEvent(bgCtx, uid, "new_msg", userEvent)
 			if pushErr == nil {
 				r.Broadcaster.Notify(uid)
+				r.LPRepo.Client.Publish(bgCtx, "lp_updates", strconv.FormatInt(uid, 10))
 			}
 		}
 	}(recipients, lpEvent, senderID)
