@@ -89,7 +89,8 @@ func startServer() {
 	if !env.IsDev() {
 		gin.SetMode(gin.ReleaseMode)
 	}
-	r := gin.Default()
+	r := gin.New()
+	r.Use(gin.Recovery())
 
 	r.GET("/nim", func(c *gin.Context) {
 		lp_trans.LongPollHandler(c.Writer, c.Request, lpBroadcaster, lpRepo)
