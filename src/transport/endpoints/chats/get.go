@@ -306,6 +306,14 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 			},
 		}
 
+		canWriteObj := gin.H{"allowed": true}
+		if getPeerType(m.InternalChatID) == "chat" {
+			if m.LeftAt != nil {
+				canWriteObj = gin.H{"allowed": false, "reason": 916}
+			}
+		}
+		conversationObj["can_write"] = canWriteObj
+
 		if uCount, ok := unreadCounts[m.InternalChatID]; ok {
 			conversationObj["unread_count"] = uCount
 		} else {
@@ -488,9 +496,27 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 			})
 		}
 	} else {
-		err = db.Instance.Where("user_id = ? AND internal_chat_id IN ? AND left_at IS NULL", currentUserID, targetChatIDs).
+		err = db.Instance.Where("user_id = ? AND internal_chat_id IN ?", currentUserID, targetChatIDs).
 			Preload("Conversation").
 			Find(&rows).Error
+		if err == nil {
+			foundChatIDs := make(map[string]bool, len(rows))
+			for _, r := range rows {
+				foundChatIDs[r.InternalChatID] = true
+			}
+			for _, tID := range targetChatIDs {
+				if !foundChatIDs[tID] && getPeerType(tID) == "chat" {
+					var conv db_models.Conversation
+					if errConv := db.Instance.Where("internal_id = ?", tID).First(&conv).Error; errConv == nil && conv.InternalID != "" {
+						rows = append(rows, db_models.ConversationMember{
+							UserID:         currentUserID,
+							InternalChatID: tID,
+							Conversation:   conv,
+						})
+					}
+				}
+			}
+		}
 	}
 
 	if err != nil {
@@ -721,14 +747,29 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 			}
 		}
 
+		canWriteObj := gin.H{"allowed": true}
+		if getPeerType(m.InternalChatID) == "chat" {
+			if m.LeftAt != nil {
+				canWriteObj = gin.H{"allowed": false, "reason": 916}
+			} else if m.UserID != currentUserID && currentUserID != 0 {
+				canWriteObj = gin.H{"allowed": false, "reason": 917}
+			}
+		}
+		convObj["can_write"] = canWriteObj
+
 		if getPeerType(m.InternalChatID) == "chat" {
 			membersList := chatMembersMap[m.InternalChatID]
 			if membersList == nil {
 				membersList = []int64{}
 			}
+			stateStr := "in"
+			if m.LeftAt != nil || (m.UserID != currentUserID && currentUserID != 0) {
+				stateStr = "left"
+			}
 			chatSettingsObj := gin.H{
 				"members":  membersList,
 				"admin_id": adminMap[m.InternalChatID],
+				"state":    stateStr,
 			}
 			if pMsgVK != nil {
 				chatSettingsObj["pinned_message"] = pMsgVK
@@ -990,8 +1031,17 @@ func GetChat(c *gin.Context, r *core.BaseHandler) {
 			var check db_models.ConversationMember
 			if err := db.Instance.Where("internal_chat_id = ? AND user_id = ?", internalChatID, currentUserID).First(&check).Error; err == nil {
 				if check.LeftAt != nil {
+					var kickMsg db_models.Message
+					if errK := db.Instance.Where("chat_id = ? AND action = ? AND action_mid = ? AND from_id != ?", internalChatID, "chat_kick_user", currentUserID, currentUserID).Order("local_id DESC").First(&kickMsg).Error; errK == nil && kickMsg.ID > 0 {
+						kickedState = 1
+					} else {
+						leftState = 1
+					}
+				} else {
 					leftState = 1
 				}
+			} else {
+				leftState = 1
 			}
 		}
 
