@@ -63,7 +63,10 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 
 	rawMessage := r.Get(c, "message")
 	cleanMessage := strings.TrimSpace(reInvisibleSpaces.ReplaceAllString(rawMessage, " "))
-	message := cleanMessage
+	var message string
+	if cleanMessage != "" {
+		message = strings.Trim(rawMessage, " \t\r\n\u200b\ufeff\u00a0\u200c\u200d")
+	}
 
 	forwardMessagesRaw := r.Get(c, "forward_messages")
 	if forwardMessagesRaw == "" {

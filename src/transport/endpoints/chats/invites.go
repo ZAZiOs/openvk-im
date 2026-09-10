@@ -252,6 +252,19 @@ func JoinChatByInviteLink(c *gin.Context, r *core.BaseHandler) {
 		return
 	}
 
+	var member db_models.ConversationMember
+	if err := db.Instance.Where("internal_chat_id = ? AND user_id = ?", invite.InternalChatID, currentUserID).First(&member).Error; err == nil {
+		if member.LeftAt != nil {
+			var lastKickMsg db_models.Message
+			if errK := db.Instance.Where("chat_id = ? AND action = ? AND action_mid = ?", invite.InternalChatID, "chat_kick_user", currentUserID).Order("local_id DESC").First(&lastKickMsg).Error; errK == nil && lastKickMsg.ID > 0 {
+				if lastKickMsg.FromID != currentUserID {
+					r.Reject(c, 15, "Access denied: you have been kicked from this chat")
+					return
+				}
+			}
+		}
+	}
+
 	messageText := "joined by invite link"
 	msg, err := chat.AddUserToConversation(
 		invite.InternalChatID,

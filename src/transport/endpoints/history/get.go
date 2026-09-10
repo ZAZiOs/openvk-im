@@ -50,7 +50,7 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 		if isGroupChat {
 			var err error
 			member, err = chat.GetMember(db.Instance, chatID, currentUserID)
-			if err != nil || member == nil || member.LeftAt != nil {
+			if err != nil || member == nil {
 				r.Reject(c, 917, "You don't have access to this chat")
 				return
 			}
@@ -206,7 +206,7 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	var unreadCount int64
-	if member != nil {
+	if member != nil && member.LeftAt == nil {
 		unreadQuery := db.Instance.Model(&db_models.Message{}).
 			Where("chat_id = ? AND local_id > ? AND from_id != ?", chatID, member.LastReadID, currentUserID)
 		unreadQuery = db_models.BuildVisibilityFilter(unreadQuery, chatID, currentUserID)

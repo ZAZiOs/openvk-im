@@ -128,8 +128,15 @@ func (c *Conversation) ToVKApiStruct(tx *gorm.DB, currentUserID int64, member *C
 	if member != nil {
 		conv.InRead = member.LastReadID
 		conv.InReadCmid = member.LastReadID
-		conv.CanWrite = VKCanWrite{
-			Allowed: member.LeftAt == nil,
+		if member.LeftAt != nil {
+			conv.CanWrite = VKCanWrite{
+				Allowed: false,
+				Reason:  916,
+			}
+		} else {
+			conv.CanWrite = VKCanWrite{
+				Allowed: true,
+			}
 		}
 	} else {
 		conv.CanWrite = VKCanWrite{
@@ -139,10 +146,12 @@ func (c *Conversation) ToVKApiStruct(tx *gorm.DB, currentUserID int64, member *C
 	}
 
 	var unreadCount int64
-	unreadQ := tx.Model(&Message{}).
-		Where("chat_id = ? AND local_id > ? AND from_id != ?", c.InternalID, conv.InRead, currentUserID)
-	unreadQ = BuildVisibilityFilter(unreadQ, c.InternalID, currentUserID)
-	unreadQ.Count(&unreadCount)
+	if member == nil || member.LeftAt == nil {
+		unreadQ := tx.Model(&Message{}).
+			Where("chat_id = ? AND local_id > ? AND from_id != ?", c.InternalID, conv.InRead, currentUserID)
+		unreadQ = BuildVisibilityFilter(unreadQ, c.InternalID, currentUserID)
+		unreadQ.Count(&unreadCount)
+	}
 	conv.UnreadCount = int(unreadCount)
 
 	if peerType == "chat" {
@@ -152,6 +161,14 @@ func (c *Conversation) ToVKApiStruct(tx *gorm.DB, currentUserID int64, member *C
 
 		if member == nil || member.LeftAt != nil {
 			settings.State = "left"
+			conv.CanWrite.Reason = 916
+			var lastKickMsg Message
+			if errK := tx.Where("chat_id = ? AND action = ? AND action_mid = ?", c.InternalID, "chat_kick_user", currentUserID).Order("local_id DESC").First(&lastKickMsg).Error; errK == nil && lastKickMsg.ID > 0 {
+				if lastKickMsg.FromID != currentUserID {
+					settings.State = "kicked"
+					conv.CanWrite.Reason = 915
+				}
+			}
 		} else {
 			settings.State = "in"
 		}
@@ -211,7 +228,16 @@ func (c *Conversation) ToVKApiChat(tx *gorm.DB, currentUserID int64, member *Con
 	}
 
 	if member != nil && member.LeftAt != nil {
-		chatObj.Left = 1
+		var lastKickMsg Message
+		if errK := tx.Where("chat_id = ? AND action = ? AND action_mid = ?", c.InternalID, "chat_kick_user", currentUserID).Order("local_id DESC").First(&lastKickMsg).Error; errK == nil && lastKickMsg.ID > 0 {
+			if lastKickMsg.FromID != currentUserID {
+				chatObj.Kicked = 1
+			} else {
+				chatObj.Left = 1
+			}
+		} else {
+			chatObj.Left = 1
+		}
 	}
 
 	return chatObj

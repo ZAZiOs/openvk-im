@@ -210,6 +210,21 @@ func AddUserToConversation(chatID string, userID int64, inviterID int64, text st
 			return errors.New("user is already in the conversation")
 		}
 
+		if findErr == nil && member.LeftAt != nil {
+			var lastKickMsg db_models.Message
+			if errK := tx.Where("chat_id = ? AND action = ? AND action_mid = ?", chatID, "chat_kick_user", userID).Order("local_id DESC").First(&lastKickMsg).Error; errK == nil && lastKickMsg.ID > 0 {
+				if lastKickMsg.FromID != userID {
+					// User was kicked from this chat
+					if inviterID == userID {
+						return errors.New("you have been kicked from this chat")
+					}
+					if !IsChatOwner(tx, chatID, inviterID) && !IsChatModerator(tx, chatID, inviterID) {
+						return errors.New("only administrators can re-invite kicked users")
+					}
+				}
+			}
+		}
+
 		isNewMember := errors.Is(findErr, gorm.ErrRecordNotFound)
 
 		localID, err := NextLocalID(tx, chatID, inviterID)
@@ -314,6 +329,9 @@ func RemoveUserFromConversation(tx *gorm.DB, chatID string, userID int64) error 
 }
 
 func CloseActiveMemberPeriod(tx *gorm.DB, chatID string, userID int64, endLocalID uint64) error {
+	_ = getDB(tx).Model(&db_models.ConversationMember{}).
+		Where("internal_chat_id = ? AND user_id = ?", chatID, userID).
+		Update("last_message_id", endLocalID).Error
 	return getDB(tx).Model(&db_models.ConversationMemberPeriod{}).
 		Where("internal_chat_id = ? AND user_id = ? AND end_local_id IS NULL", chatID, userID).
 		Update("end_local_id", endLocalID).Error

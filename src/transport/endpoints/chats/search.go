@@ -43,7 +43,36 @@ func SearchConversations(c *gin.Context, r *core.BaseHandler) {
 	} else {
 		query := db.Instance.Table("conversation_members").
 			Joins("LEFT JOIN conversations ON conversations.internal_id = conversation_members.internal_chat_id").
-			Where("conversation_members.user_id = ? AND conversation_members.left_at IS NULL", currentUserID).
+			Where("conversation_members.user_id = ?", currentUserID).
+			Where(`(
+				(
+					conversation_members.left_at IS NULL
+					AND (
+						conversation_members.internal_chat_id LIKE 'c%'
+						OR COALESCE(conversation_members.deleted_before_id, 0) = 0
+						OR COALESCE(conversations.last_message_id, conversation_members.last_message_id, 0) > conversation_members.deleted_before_id
+					)
+				)
+				OR
+				(
+					conversation_members.left_at IS NOT NULL
+					AND conversation_members.internal_chat_id LIKE 'c%'
+					AND (
+						COALESCE(conversation_members.deleted_before_id, 0) = 0
+						OR
+						EXISTS (
+							SELECT 1 FROM messages m
+							WHERE m.chat_id = conversation_members.internal_chat_id
+								AND m.deleted_at IS NULL
+								AND m.local_id > COALESCE(conversation_members.deleted_before_id, 0)
+								AND (
+									NOT EXISTS (SELECT 1 FROM conversation_member_periods p0 WHERE p0.internal_chat_id = conversation_members.internal_chat_id AND p0.user_id = conversation_members.user_id)
+									OR EXISTS (SELECT 1 FROM conversation_member_periods p WHERE p.internal_chat_id = conversation_members.internal_chat_id AND p.user_id = conversation_members.user_id AND m.local_id >= p.start_local_id AND (p.end_local_id IS NULL OR m.local_id <= p.end_local_id))
+								)
+						)
+					)
+				)
+			)`).
 			Where(
 				db.Instance.Where("conversation_members.internal_chat_id NOT LIKE ?", "c%").
 					Or("conversations.title LIKE ?", "%"+q+"%"),
@@ -103,11 +132,31 @@ func SearchConversations(c *gin.Context, r *core.BaseHandler) {
 			addID(lastMsg.FromID, &userIDs, &groupIDs, &chatIDs)
 		}
 
+		canWriteObj := gin.H{"allowed": true}
+		stateStr := "in"
+		if getPeerType(m.InternalChatID) == "chat" && m.LeftAt != nil {
+			stateStr = "left"
+			canWriteObj = gin.H{"allowed": false, "reason": 916}
+			var lastKickMsg db_models.Message
+			if errK := db.Instance.Where("chat_id = ? AND action = ? AND action_mid = ?", m.InternalChatID, "chat_kick_user", currentUserID).Order("local_id DESC").First(&lastKickMsg).Error; errK == nil && lastKickMsg.ID > 0 {
+				if lastKickMsg.FromID != currentUserID {
+					stateStr = "kicked"
+					canWriteObj = gin.H{"allowed": false, "reason": 915}
+				}
+			}
+		}
+
 		convObj := gin.H{
 			"peer":            gin.H{"id": pID, "type": getPeerType(m.InternalChatID)},
 			"last_message_id": m.LastMessageID,
 			"in_read":         m.LastReadID,
 			"out_read":        m.LastMessageID,
+			"can_write":       canWriteObj,
+		}
+		if getPeerType(m.InternalChatID) == "chat" {
+			convObj["chat_settings"] = gin.H{
+				"state": stateStr,
+			}
 		}
 
 		var msgVK interface{} = nil

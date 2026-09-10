@@ -49,7 +49,7 @@ func GetNearestMessageForDate(c *gin.Context, r *core.BaseHandler) {
 	if currentUserID != 0 {
 		if isGroupChat {
 			member, err := chat.GetMember(db.Instance, chatID, currentUserID)
-			if err != nil || member == nil || member.LeftAt != nil {
+			if err != nil || member == nil {
 				r.Reject(c, 917, "You don't have access to this chat")
 				return
 			}

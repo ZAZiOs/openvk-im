@@ -3,6 +3,7 @@ package chats
 import (
 	"context"
 	"net/http"
+	db_models "ovk-im/src/models/db"
 	lp_models "ovk-im/src/models/longpoll"
 	"ovk-im/src/repo/chat"
 	"ovk-im/src/transport/endpoints/core"
@@ -28,6 +29,26 @@ func AddChatUser(c *gin.Context, r *core.BaseHandler) {
 		return
 	}
 	chatID := chat.GetInternalChatID(peerID, currentUserID)
+
+	var targetMember db_models.ConversationMember
+	if errM := r.DB.Where("internal_chat_id = ? AND user_id = ?", chatID, userID).First(&targetMember).Error; errM == nil {
+		if targetMember.LeftAt != nil {
+			var lastKickMsg db_models.Message
+			if errK := r.DB.Where("chat_id = ? AND action = ? AND action_mid = ?", chatID, "chat_kick_user", userID).Order("local_id DESC").First(&lastKickMsg).Error; errK == nil && lastKickMsg.ID > 0 {
+				if lastKickMsg.FromID != userID {
+					if currentUserID == userID {
+						r.Reject(c, 15, "Access denied: you have been kicked from this chat")
+						return
+					}
+					inviterMember, errI := chat.GetMember(nil, chatID, currentUserID)
+					if errI != nil || inviterMember == nil || !inviterMember.IsAdmin {
+						r.Reject(c, 15, "Access denied: only administrators can invite kicked users")
+						return
+					}
+				}
+			}
+		}
+	}
 
 	messageText := "invited user " + strconv.FormatInt(userID, 10)
 

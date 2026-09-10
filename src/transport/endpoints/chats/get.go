@@ -44,12 +44,49 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 	query := db.Instance.Table("conversation_members").
 		Select(`
 			conversation_members.*, 
-			COALESCE(conversations.last_message_id, conversation_members.last_message_id) as conv_last_message_id,
+			CASE 
+				WHEN conversation_members.left_at IS NULL THEN COALESCE(conversations.last_message_id, conversation_members.last_message_id)
+				ELSE COALESCE(NULLIF(conversation_members.last_message_id, 0), (SELECT MAX(end_local_id) FROM conversation_member_periods WHERE internal_chat_id = conversation_members.internal_chat_id AND user_id = conversation_members.user_id), conversations.last_message_id)
+			END as conv_last_message_id,
 			COUNT(*) OVER() as total_count
 		`).
 		Joins("LEFT JOIN conversations ON conversations.internal_id = conversation_members.internal_chat_id").
-		Joins("LEFT JOIN messages ON messages.chat_id = conversation_members.internal_chat_id AND messages.local_id = COALESCE(conversations.last_message_id, conversation_members.last_message_id) AND messages.local_id > COALESCE(conversation_members.deleted_before_id, 0) AND messages.deleted_at IS NULL").
-		Where("conversation_members.user_id = ? AND conversation_members.left_at IS NULL", currentUserID)
+		Joins(`LEFT JOIN messages ON messages.chat_id = conversation_members.internal_chat_id AND messages.local_id = (
+			CASE 
+				WHEN conversation_members.left_at IS NULL THEN COALESCE(conversations.last_message_id, conversation_members.last_message_id)
+				ELSE COALESCE(NULLIF(conversation_members.last_message_id, 0), (SELECT MAX(end_local_id) FROM conversation_member_periods WHERE internal_chat_id = conversation_members.internal_chat_id AND user_id = conversation_members.user_id), conversations.last_message_id)
+			END
+		) AND messages.local_id > COALESCE(conversation_members.deleted_before_id, 0) AND messages.deleted_at IS NULL`).
+		Where("conversation_members.user_id = ?", currentUserID).
+		Where(`(
+			(
+				conversation_members.left_at IS NULL
+				AND (
+					conversation_members.internal_chat_id LIKE 'c%'
+					OR COALESCE(conversation_members.deleted_before_id, 0) = 0
+					OR COALESCE(conversations.last_message_id, conversation_members.last_message_id, 0) > conversation_members.deleted_before_id
+				)
+			)
+			OR
+			(
+				conversation_members.left_at IS NOT NULL
+				AND conversation_members.internal_chat_id LIKE 'c%'
+				AND (
+					COALESCE(conversation_members.deleted_before_id, 0) = 0
+					OR
+					EXISTS (
+						SELECT 1 FROM messages m
+						WHERE m.chat_id = conversation_members.internal_chat_id
+							AND m.deleted_at IS NULL
+							AND m.local_id > COALESCE(conversation_members.deleted_before_id, 0)
+							AND (
+								NOT EXISTS (SELECT 1 FROM conversation_member_periods p0 WHERE p0.internal_chat_id = conversation_members.internal_chat_id AND p0.user_id = conversation_members.user_id)
+								OR EXISTS (SELECT 1 FROM conversation_member_periods p WHERE p.internal_chat_id = conversation_members.internal_chat_id AND p.user_id = conversation_members.user_id AND m.local_id >= p.start_local_id AND (p.end_local_id IS NULL OR m.local_id <= p.end_local_id))
+							)
+					)
+				)
+			)
+		)`)
 
 	if currentUserID == 0 {
 		query = db.Instance.Table("conversations").
@@ -61,10 +98,15 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 			`).
 			Joins("LEFT JOIN messages ON messages.chat_id = conversations.internal_id AND messages.local_id = conversations.last_message_id AND messages.deleted_at IS NULL")
 	} else if filter == "unread" {
-		query = query.Where("COALESCE(conversations.last_message_id, conversation_members.last_message_id) > conversation_members.last_read_id AND COALESCE(conversations.last_message_id, conversation_members.last_message_id) > COALESCE(conversation_members.deleted_before_id, 0)")
+		query = query.Where("conversation_members.left_at IS NULL AND COALESCE(conversations.last_message_id, conversation_members.last_message_id, 0) > COALESCE(conversation_members.last_read_id, 0) AND COALESCE(conversations.last_message_id, conversation_members.last_message_id, 0) > COALESCE(conversation_members.deleted_before_id, 0)")
 	}
 
-	err := query.Order("messages.created_at DESC, messages.id DESC, COALESCE(conversations.last_message_id, conversation_members.last_message_id) DESC").
+	err := query.Order(`messages.created_at DESC, messages.id DESC, (
+		CASE 
+			WHEN conversation_members.left_at IS NULL THEN COALESCE(conversations.last_message_id, conversation_members.last_message_id)
+			ELSE COALESCE(NULLIF(conversation_members.last_message_id, 0), (SELECT MAX(end_local_id) FROM conversation_member_periods WHERE internal_chat_id = conversation_members.internal_chat_id AND user_id = conversation_members.user_id), conversations.last_message_id)
+		END
+	) DESC`).
 		Preload("Conversation").
 		Limit(count).Offset(offset).Find(&rows).Error
 
@@ -104,7 +146,7 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 		if effLastID > 0 && effLastID > row.DeletedBeforeID {
 			lastMsgKeys[row.InternalChatID] = effLastID
 		}
-		if effLastID > row.LastReadID && effLastID > row.DeletedBeforeID {
+		if row.LeftAt == nil && effLastID > row.LastReadID && effLastID > row.DeletedBeforeID {
 			unreadCheckIDs = append(unreadCheckIDs, row.InternalChatID)
 		}
 		if getPeerType(row.InternalChatID) == "chat" {
@@ -307,9 +349,16 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 		}
 
 		canWriteObj := gin.H{"allowed": true}
-		if getPeerType(m.InternalChatID) == "chat" {
-			if m.LeftAt != nil {
-				canWriteObj = gin.H{"allowed": false, "reason": 916}
+		stateStr := "in"
+		if getPeerType(m.InternalChatID) == "chat" && m.LeftAt != nil {
+			stateStr = "left"
+			canWriteObj = gin.H{"allowed": false, "reason": 916}
+			var lastKickMsg db_models.Message
+			if errK := db.Instance.Where("chat_id = ? AND action = ? AND action_mid = ?", m.InternalChatID, "chat_kick_user", currentUserID).Order("local_id DESC").First(&lastKickMsg).Error; errK == nil && lastKickMsg.ID > 0 {
+				if lastKickMsg.FromID != currentUserID {
+					stateStr = "kicked"
+					canWriteObj = gin.H{"allowed": false, "reason": 915}
+				}
 			}
 		}
 		conversationObj["can_write"] = canWriteObj
@@ -336,6 +385,7 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 			chatSettingsObj := gin.H{
 				"members":  membersList,
 				"admin_id": adminMap[m.InternalChatID],
+				"state":    stateStr,
 			}
 			if pMsgVK != nil {
 				chatSettingsObj["pinned_message"] = pMsgVK
@@ -748,11 +798,18 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 		}
 
 		canWriteObj := gin.H{"allowed": true}
+		stateStr := "in"
 		if getPeerType(m.InternalChatID) == "chat" {
-			if m.LeftAt != nil {
+			if m.LeftAt != nil || (m.UserID != currentUserID && currentUserID != 0) {
+				stateStr = "left"
 				canWriteObj = gin.H{"allowed": false, "reason": 916}
-			} else if m.UserID != currentUserID && currentUserID != 0 {
-				canWriteObj = gin.H{"allowed": false, "reason": 917}
+				var lastKickMsg db_models.Message
+				if errK := db.Instance.Where("chat_id = ? AND action = ? AND action_mid = ?", m.InternalChatID, "chat_kick_user", currentUserID).Order("local_id DESC").First(&lastKickMsg).Error; errK == nil && lastKickMsg.ID > 0 {
+					if lastKickMsg.FromID != currentUserID {
+						stateStr = "kicked"
+						canWriteObj = gin.H{"allowed": false, "reason": 915}
+					}
+				}
 			}
 		}
 		convObj["can_write"] = canWriteObj
@@ -761,10 +818,6 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 			membersList := chatMembersMap[m.InternalChatID]
 			if membersList == nil {
 				membersList = []int64{}
-			}
-			stateStr := "in"
-			if m.LeftAt != nil || (m.UserID != currentUserID && currentUserID != 0) {
-				stateStr = "left"
 			}
 			chatSettingsObj := gin.H{
 				"members":  membersList,
@@ -1031,9 +1084,13 @@ func GetChat(c *gin.Context, r *core.BaseHandler) {
 			var check db_models.ConversationMember
 			if err := db.Instance.Where("internal_chat_id = ? AND user_id = ?", internalChatID, currentUserID).First(&check).Error; err == nil {
 				if check.LeftAt != nil {
-					var kickMsg db_models.Message
-					if errK := db.Instance.Where("chat_id = ? AND action = ? AND action_mid = ? AND from_id != ?", internalChatID, "chat_kick_user", currentUserID, currentUserID).Order("local_id DESC").First(&kickMsg).Error; errK == nil && kickMsg.ID > 0 {
-						kickedState = 1
+					var lastKickMsg db_models.Message
+					if errK := db.Instance.Where("chat_id = ? AND action = ? AND action_mid = ?", internalChatID, "chat_kick_user", currentUserID).Order("local_id DESC").First(&lastKickMsg).Error; errK == nil && lastKickMsg.ID > 0 {
+						if lastKickMsg.FromID != currentUserID {
+							kickedState = 1
+						} else {
+							leftState = 1
+						}
 					} else {
 						leftState = 1
 					}
@@ -1041,7 +1098,11 @@ func GetChat(c *gin.Context, r *core.BaseHandler) {
 					leftState = 1
 				}
 			} else {
-				leftState = 1
+				if singleMode {
+					r.Reject(c, 917, "You don't have access to this chat")
+					return
+				}
+				continue
 			}
 		}
 

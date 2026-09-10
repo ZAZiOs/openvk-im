@@ -7,6 +7,7 @@ import (
 	"ovk-im/src/repo/chat"
 	"ovk-im/src/transport/endpoints/core"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -65,6 +66,12 @@ func Edit(c *gin.Context, r *core.BaseHandler) {
 
 	finalText := string(msg.Text)
 	if textExists {
+		cleanMessage := strings.TrimSpace(reInvisibleSpaces.ReplaceAllString(newMessageText, " "))
+		if cleanMessage == "" {
+			newMessageText = ""
+		} else {
+			newMessageText = strings.Trim(newMessageText, " \t\r\n\u200b\ufeff\u00a0\u200c\u200d")
+		}
 		finalText = newMessageText
 		updates["text"] = db_models.EncryptedJSON(newMessageText)
 	}
