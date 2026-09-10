@@ -2,6 +2,7 @@ package lp_models
 
 import (
 	"encoding/json"
+	"fmt"
 	db_models "ovk-im/src/models/db"
 	"strconv"
 	"strings"
@@ -344,14 +345,18 @@ func (e NewMessageEvent) ToSlice(cfg LPConfig) interface{} {
 			4,
 			e.MessageID,
 			e.Flags.Value,
-			e.MinorID,
 			peerID,
 			e.Timestamp,
-			"",
+			" ... ",
 			e.Text,
 		}
-		if cfg.HasAttachments() {
-			res = append(res, extraMap)
+		if cfg.HasAttachments() && len(extraMap) > 0 {
+			// Format params as TSV: \t<char><key> <value>
+			var paramsBuf strings.Builder
+			for k, v := range extraMap {
+				paramsBuf.WriteString(fmt.Sprintf("\t %s %v", k, v))
+			}
+			res = append(res, paramsBuf.String())
 		}
 		if cfg.ReturnRandomID() {
 			res = append(res, e.RandomID)
