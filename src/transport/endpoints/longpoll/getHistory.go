@@ -81,30 +81,55 @@ func GetLongPollHistory(c *gin.Context, r *core.BaseHandler) {
 		history = append(history, slice)
 		code := slice[0].(int)
 
-		// Code 4: New message
-		if code == 4 && (len(legacyItems) < msgsLimit && len(modernItems) < msgsLimit) {
+		// Code 4 or 101: New message
+		if (code == 4 || code == 101) && (len(legacyItems) < msgsLimit && len(modernItems) < msgsLimit) {
 			var msgID uint64
-			switch v := slice[1].(type) {
-			case uint64:
-				msgID = v
-			case int64:
-				msgID = uint64(v)
-			case int:
-				msgID = uint64(v)
+			var peerID int64
+
+			if code == 101 {
+				if mWrap, ok := slice[1].(map[string]interface{}); ok {
+					if mObj, ok := mWrap["message"].(map[string]interface{}); ok {
+						if mid, ok := mObj["mid"].(uint64); ok {
+							msgID = mid
+						} else if mid, ok := mObj["mid"].(int64); ok {
+							msgID = uint64(mid)
+						} else if mid, ok := mObj["mid"].(int); ok {
+							msgID = uint64(mid)
+						}
+						if uid, ok := mObj["uid"].(int64); ok {
+							peerID = uid
+						} else if uid, ok := mObj["uid"].(int); ok {
+							peerID = int64(uid)
+						}
+						if cid, ok := mObj["chat_id"].(int64); ok && cid > 0 {
+							peerID = 2000000000 + cid
+						} else if cid, ok := mObj["chat_id"].(int); ok && cid > 0 {
+							peerID = 2000000000 + int64(cid)
+						}
+					}
+				}
+			} else {
+				switch v := slice[1].(type) {
+				case uint64:
+					msgID = v
+				case int64:
+					msgID = uint64(v)
+				case int:
+					msgID = uint64(v)
+				}
+
+				switch v := slice[3].(type) {
+				case int64:
+					peerID = v
+				case int:
+					peerID = int64(v)
+				case uint64:
+					peerID = int64(v)
+				}
 			}
 
 			if maxMsgID > 0 && msgID <= maxMsgID {
 				continue
-			}
-
-			var peerID int64
-			switch v := slice[3].(type) {
-			case int64:
-				peerID = v
-			case int:
-				peerID = int64(v)
-			case uint64:
-				peerID = int64(v)
 			}
 
 			chatID := chat.GetInternalChatID(peerID, userID)

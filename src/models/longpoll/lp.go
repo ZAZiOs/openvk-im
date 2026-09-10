@@ -341,6 +341,40 @@ func (e NewMessageEvent) ToSlice(cfg LPConfig) interface{} {
 	}
 
 	if cfg.Version == 0 {
+		if cfg.HasExtended() {
+			out := 0
+			if (e.Flags.Value & 2) != 0 {
+				out = 1
+			}
+			readState := 1
+			if (e.Flags.Value & 1) != 0 {
+				readState = 0
+			}
+			msgUID := peerID
+			if peerID > 2000000000 && e.Attachments != nil && e.Attachments.From != 0 {
+				msgUID = e.Attachments.From
+			}
+			msgObj := map[string]interface{}{
+				"mid":        e.MessageID,
+				"uid":        msgUID,
+				"out":        out,
+				"read_state": readState,
+				"date":       e.Timestamp,
+				"title":      " ... ",
+				"body":       e.Text,
+			}
+			if peerID > 2000000000 {
+				msgObj["chat_id"] = peerID - 2000000000
+			}
+			return []interface{}{
+				101,
+				map[string]interface{}{
+					"message":  msgObj,
+					"profiles": []interface{}{},
+				},
+			}
+		}
+
 		res := []interface{}{
 			4,
 			e.MessageID,
