@@ -9,6 +9,7 @@ import (
 	db_models "ovk-im/src/models/db"
 	lp_models "ovk-im/src/models/longpoll"
 	"ovk-im/src/repo/chat"
+	"ovk-im/src/transport/endpoints/chats"
 	"ovk-im/src/transport/endpoints/core"
 
 	"github.com/gin-gonic/gin"
@@ -33,9 +34,21 @@ func Pin(c *gin.Context, r *core.BaseHandler) {
 	chatID := chat.GetInternalChatID(peerID, currentUserID)
 
 	if peerID > 2000000000 {
+		conv, err := chat.GetConversation(nil, chatID)
+		if err != nil || conv == nil {
+			r.Reject(c, 917, "Chat not found")
+			return
+		}
 		member, err := chat.GetMember(db.Instance, chatID, currentUserID)
-		if err != nil || member == nil || !member.IsAdmin {
-			r.Reject(c, 925, "You are not admin of this chat")
+		if err != nil || member == nil || member.LeftAt != nil {
+			r.Reject(c, 917, "You don't have access to this chat")
+			return
+		}
+		isOwner := conv.OwnerID != nil && *conv.OwnerID == currentUserID
+		isAdmin := isOwner || member.IsAdmin
+		perms := chats.ParseChatPermissions(conv.Settings)
+		if !chats.CheckPermission(perms.ChangePin, isOwner, isAdmin, true) {
+			r.Reject(c, 925, "You don't have permission to pin messages in this chat")
 			return
 		}
 	} else {
@@ -129,9 +142,21 @@ func Unpin(c *gin.Context, r *core.BaseHandler) {
 	chatID := chat.GetInternalChatID(peerID, currentUserID)
 
 	if peerID > 2000000000 {
+		conv, err := chat.GetConversation(nil, chatID)
+		if err != nil || conv == nil {
+			r.Reject(c, 917, "Chat not found")
+			return
+		}
 		member, err := chat.GetMember(db.Instance, chatID, currentUserID)
-		if err != nil || member == nil || !member.IsAdmin {
-			r.Reject(c, 925, "You are not admin of this chat")
+		if err != nil || member == nil || member.LeftAt != nil {
+			r.Reject(c, 917, "You don't have access to this chat")
+			return
+		}
+		isOwner := conv.OwnerID != nil && *conv.OwnerID == currentUserID
+		isAdmin := isOwner || member.IsAdmin
+		perms := chats.ParseChatPermissions(conv.Settings)
+		if !chats.CheckPermission(perms.ChangePin, isOwner, isAdmin, true) {
+			r.Reject(c, 925, "You don't have permission to unpin messages in this chat")
 			return
 		}
 	}

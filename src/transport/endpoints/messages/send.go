@@ -16,6 +16,7 @@ import (
 	db_models "ovk-im/src/models/db"
 	lp_models "ovk-im/src/models/longpoll"
 	"ovk-im/src/repo/chat"
+	"ovk-im/src/transport/endpoints/chats"
 	"ovk-im/src/transport/endpoints/core"
 
 	"github.com/gin-gonic/gin"
@@ -42,6 +43,84 @@ type MultiPeerResponse struct {
 }
 
 var reInvisibleSpaces = regexp.MustCompile(`[\s\x{200b}\x{feff}\x{00a0}\x{200c}\x{200d}]+`)
+
+type MentionItem struct {
+	UserID      int64
+	MentionType string
+}
+
+var (
+	reBracketMention = regexp.MustCompile(`\[(id|club|public|all|online)(\d+)?(?:\|([^\]]*))?\]`)
+	reWordMention    = regexp.MustCompile(`(?:^|[\s(])([@*])(all|online|id\d+)\b`)
+)
+
+func parseMentions(text string) []MentionItem {
+	var result []MentionItem
+	seen := make(map[string]bool)
+
+	// 1. Match [id123|Name], [club123|Name], [all|Всем], [online|Онлайн]
+	matches := reBracketMention.FindAllStringSubmatch(text, -1)
+	for _, m := range matches {
+		tagType := strings.ToLower(m[1])
+		rawID := m[2]
+
+		switch tagType {
+		case "id":
+			if id, err := strconv.ParseInt(rawID, 10, 64); err == nil && id > 0 {
+				key := fmt.Sprintf("user:%d", id)
+				if !seen[key] {
+					seen[key] = true
+					result = append(result, MentionItem{UserID: id, MentionType: "user"})
+				}
+			}
+		case "club", "public":
+			if id, err := strconv.ParseInt(rawID, 10, 64); err == nil && id > 0 {
+				key := fmt.Sprintf("user:%d", -id)
+				if !seen[key] {
+					seen[key] = true
+					result = append(result, MentionItem{UserID: -id, MentionType: "user"})
+				}
+			}
+		case "all":
+			if !seen["all"] {
+				seen["all"] = true
+				result = append(result, MentionItem{UserID: 0, MentionType: "all"})
+			}
+		case "online":
+			if !seen["online"] {
+				seen["online"] = true
+				result = append(result, MentionItem{UserID: -1, MentionType: "online"})
+			}
+		}
+	}
+
+	// 2. Match @all, @online, @id123, *all, *online, *id123
+	wordMatches := reWordMention.FindAllStringSubmatch(text, -1)
+	for _, m := range wordMatches {
+		target := strings.ToLower(m[2])
+		if target == "all" {
+			if !seen["all"] {
+				seen["all"] = true
+				result = append(result, MentionItem{UserID: 0, MentionType: "all"})
+			}
+		} else if target == "online" {
+			if !seen["online"] {
+				seen["online"] = true
+				result = append(result, MentionItem{UserID: -1, MentionType: "online"})
+			}
+		} else if strings.HasPrefix(target, "id") {
+			if id, err := strconv.ParseInt(target[2:], 10, 64); err == nil && id > 0 {
+				key := fmt.Sprintf("user:%d", id)
+				if !seen[key] {
+					seen[key] = true
+					result = append(result, MentionItem{UserID: id, MentionType: "user"})
+				}
+			}
+		}
+	}
+
+	return result
+}
 
 func Send(c *gin.Context, r *core.BaseHandler) {
 	val, exists := c.Get("userID")
@@ -380,6 +459,36 @@ func executeSendMessage(
 		replyTo = id
 	}
 
+	var validMentions []MentionItem
+	if message != "" {
+		parsedMentions := parseMentions(message)
+		if len(parsedMentions) > 0 {
+			canUseMassMentions := true
+			if isGroupChat {
+				var conv db_models.Conversation
+				if err := db.Instance.Where("internal_id = ?", internalChatID).First(&conv).Error; err == nil {
+					perms := chats.ParseChatPermissions(conv.Settings)
+					var member db_models.ConversationMember
+					mErr := db.Instance.Where("internal_chat_id = ? AND user_id = ?", internalChatID, senderID).First(&member).Error
+					isOwner := (conv.OwnerID != nil && *conv.OwnerID == senderID)
+					isAdmin := (mErr == nil && member.IsAdmin)
+					isMember := (mErr == nil && (member.LeftAt == nil || member.LeftAt.IsZero()))
+					canUseMassMentions = chats.CheckPermission(perms.UseMassMentions, isOwner, isAdmin, isMember)
+				}
+			}
+
+			for _, m := range parsedMentions {
+				if m.MentionType == "all" || m.MentionType == "online" {
+					if canUseMassMentions {
+						validMentions = append(validMentions, m)
+					}
+				} else {
+					validMentions = append(validMentions, m)
+				}
+			}
+		}
+	}
+
 	var finalLocalID uint64
 	var finalMessageID uint64
 
@@ -428,6 +537,21 @@ func executeSendMessage(
 			return err
 		}
 		finalMessageID = newMessage.ID
+
+		for _, m := range validMentions {
+			mentionRecord := db_models.MessageMention{
+				MessageID:   newMessage.ID,
+				ChatID:      internalChatID,
+				PeerID:      peerID,
+				FromID:      senderID,
+				UserID:      m.UserID,
+				MentionType: m.MentionType,
+				CreatedAt:   time.Now(),
+			}
+			if err := tx.Create(&mentionRecord).Error; err != nil {
+				return err
+			}
+		}
 
 		if err := tx.Model(&db_models.Conversation{}).
 			Where("internal_id = ?", internalChatID).
@@ -499,11 +623,6 @@ func executeSendMessage(
 		db.Instance.Model(&db_models.ConversationMember{}).
 			Where("internal_chat_id = ? AND (left_at IS NULL OR left_at = 0)", internalChatID).
 			Pluck("user_id", &recipients)
-
-		log.Printf("[DEBUG GroupChat] chatID=%s, found recipients=%v", internalChatID, recipients)
-		if len(recipients) == 0 {
-			log.Printf("[ERROR GroupChat] No recipients found for chat %s!", internalChatID)
-		}
 	} else {
 		recipients = append(recipients, senderID)
 		if peerID != senderID {
@@ -511,7 +630,7 @@ func executeSendMessage(
 		}
 	}
 
-	go func(rcps []int64, event lp_models.NewMessageEvent, sID int64) {
+	go func(rcps []int64, event lp_models.NewMessageEvent, sID int64, mentions []MentionItem) {
 		defer func() {
 			if rec := recover(); rec != nil {
 				log.Printf("[Messages.Send Panic] %v", rec)
@@ -550,9 +669,61 @@ func executeSendMessage(
 			}
 		}
 
+		var mutes []db_models.ConversationMute
+		db.Instance.Where("user_id IN (?) AND peer_id = ?", rcps, peerID).Find(&mutes)
+		muteMap := make(map[int64]db_models.ConversationMute)
+		for _, m := range mutes {
+			muteMap[m.UserID] = m
+		}
+
+		nowUnix := time.Now().Unix()
+		hasAllMention := false
+		hasOnlineMention := false
+		mentionedUserIDs := make(map[int64]bool)
+
+		for _, m := range mentions {
+			if m.MentionType == "all" {
+				hasAllMention = true
+			} else if m.MentionType == "online" {
+				hasOnlineMention = true
+			} else if m.MentionType == "user" {
+				mentionedUserIDs[m.UserID] = true
+			}
+		}
+
 		for _, uid := range rcps {
 			userEvent := event
 			userEvent.Flags = lp_models.MessageFlags{Value: baseFlags}
+
+			mute, hasMute := muteMap[uid]
+			isMuted := false
+			if hasMute {
+				if mute.DisabledUntil == -1 || (mute.DisabledUntil > 0 && mute.DisabledUntil > nowUnix) || !mute.Sound {
+					isMuted = true
+				}
+			}
+
+			isMentioned := false
+			if uid != sID {
+				if mentionedUserIDs[uid] && (!hasMute || !mute.DisabledMentions) {
+					isMentioned = true
+				} else if hasAllMention && (!hasMute || (!mute.DisabledMassMentions && !mute.DisabledMentions)) {
+					isMentioned = true
+				} else if hasOnlineMention && (!hasMute || (!mute.DisabledMassMentions && !mute.DisabledMentions)) {
+					score, err := r.LPRepo.Client.ZScore(bgCtx, "im:online_users", strconv.FormatInt(uid, 10)).Result()
+					if err == nil && (nowUnix-int64(score) <= 300) {
+						isMentioned = true
+					}
+				}
+			}
+
+			var userLPAttach lp_models.LPAttachments
+			if event.Attachments != nil {
+				userLPAttach = *event.Attachments
+			}
+			userLPAttach.Muted = isMuted
+			userLPAttach.Mention = isMentioned
+			userEvent.Attachments = &userLPAttach
 
 			if uid == sID {
 				userEvent.Flags.Add(lp_models.FlagOutbox)
@@ -574,7 +745,7 @@ func executeSendMessage(
 				r.LPRepo.Client.Publish(bgCtx, "lp_updates", strconv.FormatInt(uid, 10))
 			}
 		}
-	}(recipients, lpEvent, senderID)
+	}(recipients, lpEvent, senderID, validMentions)
 
 	return finalMessageID, finalLocalID, 0, ""
 }

@@ -30,9 +30,15 @@ func (ej *EncryptedJSON) Scan(value interface{}) error {
 		return fmt.Errorf("invalid data type for EncryptedJSON")
 	}
 
+	if len(s) > 0 && (s[0] == '{' || s[0] == '[') {
+		*ej = s
+		return nil
+	}
+
 	decrypted, err := crypto.Decrypt(string(s))
 	if err != nil {
-		return err
+		*ej = s
+		return nil
 	}
 	*ej = []byte(decrypted)
 	return nil

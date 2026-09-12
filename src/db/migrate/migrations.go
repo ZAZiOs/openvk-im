@@ -27,6 +27,8 @@ func CreateOrMigrateDB() {
 		&dbm.ImportantMessage{},
 		&dbm.ConversationMemberPeriod{},
 		&dbm.DeletedMessage{},
+		&dbm.ConversationMute{},
+		&dbm.MessageMention{},
 	)
 
 	if err != nil {

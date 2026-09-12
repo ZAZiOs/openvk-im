@@ -64,6 +64,8 @@ type LPAttachments struct {
 	ReplyTo uint64
 	Fwd     string
 	CMID    uint64
+	Mention bool
+	Muted   bool
 }
 type LPAttachmentItem struct {
 	Type string
@@ -101,6 +103,12 @@ func (a LPAttachments) ToMap() map[string]interface{} {
 	if a.CMID != 0 {
 		res["conversation_message_id"] = a.CMID
 		res["cmid"] = a.CMID
+	}
+	if a.Mention {
+		res["mention"] = 1
+	}
+	if a.Muted {
+		res["muted"] = 1
 	}
 
 	return res

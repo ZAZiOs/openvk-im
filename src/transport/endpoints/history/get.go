@@ -147,6 +147,7 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 	readCache[chatID] = memberStates
 
 	preloadedMap := db_models.PreloadNestedMessages(db.Instance, msgs, 10)
+	importantMap := db_models.PreloadImportantMapFromMessages(db.Instance, currentUserID, msgs, preloadedMap)
 
 	var chatMembers []int64
 	var chatAdminID int64
@@ -175,7 +176,7 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 	if apiV.IsOlderThan(5, 80) {
 		legacyItems := make([]db_models.VKApiMessageLegacy, len(msgs))
 		for i, m := range msgs {
-			vkMsg := m.ToVKApiStructBatchLegacy(db.Instance, 10, currentUserID, peerID, preloadedMap, readCache, nil)
+			vkMsg := m.ToVKApiStructBatchLegacy(db.Instance, 10, currentUserID, peerID, preloadedMap, readCache, nil, importantMap)
 			if previewLength > 0 {
 				vkMsg.Body = core.TruncateWords(vkMsg.Body, previewLength)
 			}
@@ -196,7 +197,7 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 	} else {
 		modernItems := make([]db_models.VKApiMessage, len(msgs))
 		for i, m := range msgs {
-			vkMsg := m.ToVKApiStructBatch(db.Instance, 10, currentUserID, peerID, preloadedMap, readCache, nil)
+			vkMsg := m.ToVKApiStructBatch(db.Instance, 10, currentUserID, peerID, preloadedMap, readCache, nil, importantMap)
 			if previewLength > 0 {
 				vkMsg.Text = core.TruncateWords(vkMsg.Text, previewLength)
 			}

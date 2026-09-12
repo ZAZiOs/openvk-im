@@ -194,16 +194,65 @@ func PreloadNestedMessages(tx *gorm.DB, initialMsgs []Message, maxDepth int) map
 	return cache
 }
 
+func PreloadImportantMapFromMessages(tx *gorm.DB, currentUserID int64, msgs []Message, cache map[uint64]Message) map[uint64]bool {
+	importantMap := make(map[uint64]bool)
+	if tx == nil || currentUserID == 0 {
+		return importantMap
+	}
+	idMap := make(map[uint64]struct{})
+	for _, m := range msgs {
+		if m.ID > 0 {
+			idMap[m.ID] = struct{}{}
+		}
+	}
+	if cache != nil {
+		for _, m := range cache {
+			if m.ID > 0 {
+				idMap[m.ID] = struct{}{}
+			}
+		}
+	}
+	if len(idMap) == 0 {
+		return importantMap
+	}
+	msgIDs := make([]uint64, 0, len(idMap))
+	for id := range idMap {
+		msgIDs = append(msgIDs, id)
+	}
+	var importantIDs []uint64
+	tx.Table("important_messages").
+		Where("user_id = ? AND message_id IN ?", currentUserID, msgIDs).
+		Pluck("message_id", &importantIDs)
+	for _, id := range importantIDs {
+		importantMap[id] = true
+	}
+	return importantMap
+}
+
 func (m *Message) ToVKApiStruct(tx *gorm.DB, depth int, currentUserID int64, requestedPeerID int64) VKApiMessage {
 	if depth <= 0 || (m.ReplyTo == nil && m.ForwardMessages == "") {
-		return m.ToVKApiStructBatch(tx, depth, currentUserID, requestedPeerID, nil, nil, nil)
+		return m.ToVKApiStructBatch(tx, depth, currentUserID, requestedPeerID, nil, nil, nil, nil)
 	}
 
 	cache := PreloadNestedMessages(tx, []Message{*m}, depth)
-	return m.ToVKApiStructBatch(tx, depth, currentUserID, requestedPeerID, cache, nil, nil)
+	importantMap := PreloadImportantMapFromMessages(tx, currentUserID, []Message{*m}, cache)
+	return m.ToVKApiStructBatch(tx, depth, currentUserID, requestedPeerID, cache, nil, nil, importantMap)
 }
 
-func (m *Message) ToVKApiStructBatch(tx *gorm.DB, depth int, currentUserID int64, requestedPeerID int64, cache map[uint64]Message, readCache map[string][]MemberReadState, pinnedCache map[string]uint64) VKApiMessage {
+func (m *Message) ToVKApiStructBatch(tx *gorm.DB, depth int, currentUserID int64, requestedPeerID int64, cache map[uint64]Message, readCache map[string][]MemberReadState, pinnedCache map[string]uint64, importantCache map[uint64]bool) VKApiMessage {
+	isImp := m.Important
+	if importantCache != nil {
+		if importantCache[m.ID] {
+			isImp = true
+		}
+	} else if tx != nil && currentUserID != 0 && m.ID > 0 {
+		var cnt int64
+		tx.Table("important_messages").Where("user_id = ? AND message_id = ?", currentUserID, m.ID).Count(&cnt)
+		if cnt > 0 {
+			isImp = true
+		}
+	}
+
 	vkMsg := VKApiMessage{
 		ID:                    m.ID,
 		ConversationMessageID: m.LocalID,
@@ -213,7 +262,7 @@ func (m *Message) ToVKApiStructBatch(tx *gorm.DB, depth int, currentUserID int64
 		FromID:                m.FromID,
 		Text:                  string(m.Text),
 		RandomID:              m.RandomID,
-		Important:             m.Important,
+		Important:             isImp,
 		Attachments:           string(m.Attachments),
 	}
 
@@ -272,7 +321,7 @@ func (m *Message) ToVKApiStructBatch(tx *gorm.DB, depth int, currentUserID int64
 
 	if m.ReplyTo != nil && *m.ReplyTo > 0 && depth > 0 && cache != nil {
 		if replyMsg, ok := cache[*m.ReplyTo]; ok {
-			rm := replyMsg.ToVKApiStructBatch(tx, depth-1, currentUserID, requestedPeerID, cache, readCache, pinnedCache)
+			rm := replyMsg.ToVKApiStructBatch(tx, depth-1, currentUserID, requestedPeerID, cache, readCache, pinnedCache, importantCache)
 			vkMsg.ReplyMessage = &rm
 		}
 	}
@@ -288,7 +337,7 @@ func (m *Message) ToVKApiStructBatch(tx *gorm.DB, depth int, currentUserID int64
 				}
 
 				if fwdMsg, ok := cache[id]; ok {
-					vkMsg.ForwardMessages = append(vkMsg.ForwardMessages, fwdMsg.ToVKApiStructBatch(tx, depth-1, currentUserID, requestedPeerID, cache, readCache, pinnedCache))
+					vkMsg.ForwardMessages = append(vkMsg.ForwardMessages, fwdMsg.ToVKApiStructBatch(tx, depth-1, currentUserID, requestedPeerID, cache, readCache, pinnedCache, importantCache))
 				}
 			}
 		}
@@ -311,23 +360,24 @@ func (m *Message) ToVKApiStructVersioned(tx *gorm.DB, depth int, currentUserID i
 	return m.ToVKApiStruct(tx, depth, currentUserID, requestedPeerID)
 }
 
-func (m *Message) ToVKApiStructBatchVersioned(tx *gorm.DB, depth int, currentUserID int64, requestedPeerID int64, cache map[uint64]Message, readCache map[string][]MemberReadState, pinnedCache map[string]uint64, apiV ApiV) any {
+func (m *Message) ToVKApiStructBatchVersioned(tx *gorm.DB, depth int, currentUserID int64, requestedPeerID int64, cache map[uint64]Message, readCache map[string][]MemberReadState, pinnedCache map[string]uint64, importantCache map[uint64]bool, apiV ApiV) any {
 	if apiV.IsOlderThan(5, 80) {
-		return m.ToVKApiStructBatchLegacy(tx, depth, currentUserID, requestedPeerID, cache, readCache, pinnedCache)
+		return m.ToVKApiStructBatchLegacy(tx, depth, currentUserID, requestedPeerID, cache, readCache, pinnedCache, importantCache)
 	}
-	return m.ToVKApiStructBatch(tx, depth, currentUserID, requestedPeerID, cache, readCache, pinnedCache)
+	return m.ToVKApiStructBatch(tx, depth, currentUserID, requestedPeerID, cache, readCache, pinnedCache, importantCache)
 }
 
 func (m *Message) ToVKApiStructLegacy(tx *gorm.DB, depth int, currentUserID int64, requestedPeerID int64) VKApiMessageLegacy {
 	if depth <= 0 || m.ForwardMessages == "" {
-		return m.ToVKApiStructBatchLegacy(tx, depth, currentUserID, requestedPeerID, nil, nil, nil)
+		return m.ToVKApiStructBatchLegacy(tx, depth, currentUserID, requestedPeerID, nil, nil, nil, nil)
 	}
 
 	cache := PreloadNestedMessages(tx, []Message{*m}, depth)
-	return m.ToVKApiStructBatchLegacy(tx, depth, currentUserID, requestedPeerID, cache, nil, nil)
+	importantMap := PreloadImportantMapFromMessages(tx, currentUserID, []Message{*m}, cache)
+	return m.ToVKApiStructBatchLegacy(tx, depth, currentUserID, requestedPeerID, cache, nil, nil, importantMap)
 }
 
-func (m *Message) ToVKApiStructBatchLegacy(tx *gorm.DB, depth int, currentUserID int64, requestedPeerID int64, cache map[uint64]Message, readCache map[string][]MemberReadState, pinnedCache map[string]uint64) VKApiMessageLegacy {
+func (m *Message) ToVKApiStructBatchLegacy(tx *gorm.DB, depth int, currentUserID int64, requestedPeerID int64, cache map[uint64]Message, readCache map[string][]MemberReadState, pinnedCache map[string]uint64, importantCache map[uint64]bool) VKApiMessageLegacy {
 	userID := m.FromID
 	if m.FromID == currentUserID {
 		if requestedPeerID > 0 && requestedPeerID < 2000000000 {
@@ -357,6 +407,19 @@ func (m *Message) ToVKApiStructBatchLegacy(tx *gorm.DB, depth int, currentUserID
 		hasEmoji = 0
 	}
 
+	isImp := m.Important
+	if importantCache != nil {
+		if importantCache[m.ID] {
+			isImp = true
+		}
+	} else if tx != nil && currentUserID != 0 && m.ID > 0 {
+		var cnt int64
+		tx.Table("important_messages").Where("user_id = ? AND message_id = ?", currentUserID, m.ID).Count(&cnt)
+		if cnt > 0 {
+			isImp = true
+		}
+	}
+
 	vkMsg := VKApiMessageLegacy{
 		ID:          m.ID,
 		Date:        m.CreatedAt.Unix(),
@@ -364,7 +427,7 @@ func (m *Message) ToVKApiStructBatchLegacy(tx *gorm.DB, depth int, currentUserID
 		FromID:      m.FromID,
 		Body:        body,
 		Attachments: attachments,
-		Important:   m.Important,
+		Important:   isImp,
 		Emoji:       hasEmoji,
 		Deleted:     deletedFlag,
 	}
@@ -402,13 +465,13 @@ func (m *Message) ToVKApiStructBatchLegacy(tx *gorm.DB, depth int, currentUserID
 				}
 
 				if fwdMsg, ok := cache[id]; ok {
-					vkMsg.ForwardMessages = append(vkMsg.ForwardMessages, fwdMsg.ToVKApiStructBatchLegacy(tx, depth-1, currentUserID, requestedPeerID, cache, readCache, pinnedCache))
+					vkMsg.ForwardMessages = append(vkMsg.ForwardMessages, fwdMsg.ToVKApiStructBatchLegacy(tx, depth-1, currentUserID, requestedPeerID, cache, readCache, pinnedCache, importantCache))
 				}
 			}
 		}
 	} else if !isDeleted && m.ReplyTo != nil && *m.ReplyTo > 0 && depth > 0 && cache != nil {
 		if replyMsg, ok := cache[*m.ReplyTo]; ok {
-			vkMsg.ForwardMessages = append(vkMsg.ForwardMessages, replyMsg.ToVKApiStructBatchLegacy(tx, depth-1, currentUserID, requestedPeerID, cache, readCache, pinnedCache))
+			vkMsg.ForwardMessages = append(vkMsg.ForwardMessages, replyMsg.ToVKApiStructBatchLegacy(tx, depth-1, currentUserID, requestedPeerID, cache, readCache, pinnedCache, importantCache))
 		}
 	}
 

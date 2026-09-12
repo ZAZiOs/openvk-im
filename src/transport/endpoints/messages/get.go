@@ -268,6 +268,7 @@ func GetByID(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	preloadedMap := db_models.PreloadNestedMessages(dbx.Instance, dbMessages, 10)
+	importantMap := db_models.PreloadImportantMapFromMessages(dbx.Instance, currentUserID, dbMessages, preloadedMap)
 
 	var chatIDsToFetchMembers []string
 	var targetChatIDs []string
@@ -331,7 +332,7 @@ func GetByID(c *gin.Context, r *core.BaseHandler) {
 		legacyItems := make([]db_models.VKApiMessageLegacy, 0, len(dbMessages))
 		for _, m := range dbMessages {
 			mPeerID := chat.DerivePeerID(m.ChatID, currentUserID)
-			vkMsg := m.ToVKApiStructBatchLegacy(dbx.Instance, 10, currentUserID, mPeerID, preloadedMap, readCache, nil)
+			vkMsg := m.ToVKApiStructBatchLegacy(dbx.Instance, 10, currentUserID, mPeerID, preloadedMap, readCache, nil, importantMap)
 			if previewLength > 0 {
 				vkMsg.Body = core.TruncateWords(vkMsg.Body, previewLength)
 			}
@@ -355,7 +356,7 @@ func GetByID(c *gin.Context, r *core.BaseHandler) {
 		modernItems := make([]db_models.VKApiMessage, 0, len(dbMessages))
 		for _, m := range dbMessages {
 			mPeerID := chat.DerivePeerID(m.ChatID, currentUserID)
-			vkMsg := m.ToVKApiStructBatch(dbx.Instance, 10, currentUserID, mPeerID, preloadedMap, readCache, nil)
+			vkMsg := m.ToVKApiStructBatch(dbx.Instance, 10, currentUserID, mPeerID, preloadedMap, readCache, nil, importantMap)
 			if previewLength > 0 {
 				vkMsg.Text = core.TruncateWords(vkMsg.Text, previewLength)
 			}

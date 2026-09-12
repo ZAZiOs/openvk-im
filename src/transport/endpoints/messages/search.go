@@ -44,12 +44,41 @@ func Search(c *gin.Context, r *core.BaseHandler) {
 	if targetChatID != "" {
 		messageIDs, err = r.SearchRepo.SearchMessages(targetChatID, q)
 	} else if currentUserID == 0 {
-		err = db.Instance.Model(&db_models.MessageSearchIndex{}).
-			Select("message_id").
-			Where("word_hash IN ?", r.SearchRepo.PrepareHashes(q)).
-			Group("message_id").
-			Having("COUNT(DISTINCT word_hash) = ?", r.SearchRepo.WordsCount(q)).
-			Pluck("message_id", &messageIDs).Error
+		var textMsgIDs []uint64
+		if r.SearchRepo.WordsCount(q) > 0 {
+			_ = db.Instance.Model(&db_models.MessageSearchIndex{}).
+				Select("message_id").
+				Where("word_hash IN ?", r.SearchRepo.PrepareHashes(q)).
+				Group("message_id").
+				Having("COUNT(DISTINCT word_hash) = ?", r.SearchRepo.WordsCount(q)).
+				Pluck("message_id", &textMsgIDs).Error
+		}
+
+		var chatMsgIDs []uint64
+		var matchedChatIDs []string
+		_ = db.Instance.Model(&db_models.Conversation{}).
+			Where("title LIKE ?", "%"+q+"%").
+			Pluck("internal_id", &matchedChatIDs).Error
+
+		if len(matchedChatIDs) > 0 {
+			_ = db.Instance.Model(&db_models.Message{}).
+				Where("chat_id IN ? AND deleted_at IS NULL", matchedChatIDs).
+				Pluck("id", &chatMsgIDs).Error
+		}
+
+		idSet := make(map[uint64]bool)
+		for _, id := range textMsgIDs {
+			if !idSet[id] {
+				idSet[id] = true
+				messageIDs = append(messageIDs, id)
+			}
+		}
+		for _, id := range chatMsgIDs {
+			if !idSet[id] {
+				idSet[id] = true
+				messageIDs = append(messageIDs, id)
+			}
+		}
 	} else {
 		var myChatIDs []string
 		db.Instance.Model(&db_models.ConversationMember{}).
@@ -61,12 +90,41 @@ func Search(c *gin.Context, r *core.BaseHandler) {
 			return
 		}
 
-		err = db.Instance.Model(&db_models.MessageSearchIndex{}).
-			Select("message_id").
-			Where("chat_id IN ? AND word_hash IN ?", myChatIDs, r.SearchRepo.PrepareHashes(q)).
-			Group("message_id").
-			Having("COUNT(DISTINCT word_hash) = ?", r.SearchRepo.WordsCount(q)).
-			Pluck("message_id", &messageIDs).Error
+		var textMsgIDs []uint64
+		if r.SearchRepo.WordsCount(q) > 0 {
+			_ = db.Instance.Model(&db_models.MessageSearchIndex{}).
+				Select("message_id").
+				Where("chat_id IN ? AND word_hash IN ?", myChatIDs, r.SearchRepo.PrepareHashes(q)).
+				Group("message_id").
+				Having("COUNT(DISTINCT word_hash) = ?", r.SearchRepo.WordsCount(q)).
+				Pluck("message_id", &textMsgIDs).Error
+		}
+
+		var chatMsgIDs []uint64
+		var matchedChatIDs []string
+		_ = db.Instance.Model(&db_models.Conversation{}).
+			Where("internal_id IN ? AND title LIKE ?", myChatIDs, "%"+q+"%").
+			Pluck("internal_id", &matchedChatIDs).Error
+
+		if len(matchedChatIDs) > 0 {
+			_ = db.Instance.Model(&db_models.Message{}).
+				Where("chat_id IN ? AND deleted_at IS NULL", matchedChatIDs).
+				Pluck("id", &chatMsgIDs).Error
+		}
+
+		idSet := make(map[uint64]bool)
+		for _, id := range textMsgIDs {
+			if !idSet[id] {
+				idSet[id] = true
+				messageIDs = append(messageIDs, id)
+			}
+		}
+		for _, id := range chatMsgIDs {
+			if !idSet[id] {
+				idSet[id] = true
+				messageIDs = append(messageIDs, id)
+			}
+		}
 	}
 
 	if err != nil || len(messageIDs) == 0 {
@@ -108,6 +166,7 @@ func Search(c *gin.Context, r *core.BaseHandler) {
 	}
 
 	preloadedMap := db_models.PreloadNestedMessages(db.Instance, msgs, 10)
+	importantMap := db_models.PreloadImportantMapFromMessages(db.Instance, currentUserID, msgs, preloadedMap)
 
 	readCache := make(map[string][]db_models.MemberReadState)
 	if len(targetChatIDs) > 0 {
@@ -157,7 +216,7 @@ func Search(c *gin.Context, r *core.BaseHandler) {
 		legacyItems := make([]db_models.VKApiMessageLegacy, 0, len(msgs))
 		for _, m := range msgs {
 			msgPeerID := chat.DerivePeerID(m.ChatID, currentUserID)
-			vkMsg := m.ToVKApiStructBatchLegacy(db.Instance, 10, currentUserID, msgPeerID, preloadedMap, readCache, nil)
+			vkMsg := m.ToVKApiStructBatchLegacy(db.Instance, 10, currentUserID, msgPeerID, preloadedMap, readCache, nil, importantMap)
 			if previewLen > 0 {
 				vkMsg.Body = core.TruncateWords(vkMsg.Body, previewLen)
 			}
@@ -181,7 +240,7 @@ func Search(c *gin.Context, r *core.BaseHandler) {
 		modernItems := make([]db_models.VKApiMessage, 0, len(msgs))
 		for _, m := range msgs {
 			msgPeerID := chat.DerivePeerID(m.ChatID, currentUserID)
-			vkMsg := m.ToVKApiStructBatch(db.Instance, 10, currentUserID, msgPeerID, preloadedMap, readCache, nil)
+			vkMsg := m.ToVKApiStructBatch(db.Instance, 10, currentUserID, msgPeerID, preloadedMap, readCache, nil, importantMap)
 			if previewLen > 0 {
 				vkMsg.Text = core.TruncateWords(vkMsg.Text, previewLen)
 			}

@@ -6,6 +6,7 @@ import (
 	"github.com/gin-gonic/gin"
 
 	env "ovk-im/src/config"
+	"ovk-im/src/transport/endpoints/account"
 	"ovk-im/src/transport/endpoints/chats"
 	"ovk-im/src/transport/endpoints/core"
 	"ovk-im/src/transport/endpoints/custom"
@@ -88,9 +89,14 @@ var writeMethods = map[string]bool{
 	"messages.getInviteLink":               true,
 	"messages.joinChatByInviteLink":        true,
 	"messages.setActivity":                 true,
+	"messages.setMemberRole":               true,
+	"messages.setChatPermissions":          true,
+	"account.setSilenceMode":               true,
 	"im.sendAction":                        true,
 	"im.setChatModerator":                  true,
 	"im.removeChatModerator":               true,
+	"im.setChatPermissions":                true,
+	"im.setSilenceMode":                    true,
 }
 
 func (r *Router) BasicHandler(c *gin.Context) {
@@ -136,6 +142,8 @@ func (r *Router) BasicHandler(c *gin.Context) {
 		"messages.deleteChatPhoto":             chats.DeleteChatPhoto,
 		"messages.addChatUser":                 chats.AddChatUser,
 		"messages.removeChatUser":              chats.RemoveChatUser,
+		"messages.setMemberRole":               chats.SetMemberRole,
+		"messages.setChatPermissions":          chats.SetChatPermissions,
 		"messages.getConversations":            chats.GetConversations,
 		"messages.getConversationMembers":      chats.GetConversationMembers,
 		"messages.getConversationsById":        chats.GetConversationsById,
@@ -152,6 +160,10 @@ func (r *Router) BasicHandler(c *gin.Context) {
 		"messages.getLongPollServer":  lp_ep.GetLongPollServer,
 		"messages.getLongPollHistory": lp_ep.GetLongPollHistory,
 
+		"account.setSilenceMode": account.SetSilenceMode,
+		"account.getPushSettings": account.GetPushSettings,
+		"im.setSilenceMode":     account.SetSilenceMode,
+
 		"im.getUnreadMessages":      custom.GetUnreadMessages,
 		"im.getUnreadConversations": custom.GetUnreadConversations,
 		"im.getMe":                  custom.GetMe,
@@ -161,6 +173,7 @@ func (r *Router) BasicHandler(c *gin.Context) {
 		"im.setChatModerator":       chats.SetChatModerator,
 		"im.removeChatModerator":    chats.RemoveChatModerator,
 		"im.getChatModerators":      chats.GetChatModerators,
+		"im.setChatPermissions":     chats.SetChatPermissions,
 		"im.setOnline":              status.SetOnline,
 		"im.setOffline":             status.SetOffline,
 		"im.setUserOnline":          status.SetOnline,

@@ -2,6 +2,7 @@ package chats
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -317,5 +318,189 @@ func GetChatModerators(c *gin.Context, r *core.BaseHandler) {
 			"items":         moderatorIDs,
 			"moderator_ids": moderatorIDs,
 		},
+	})
+}
+
+func SetMemberRole(c *gin.Context, r *core.BaseHandler) {
+	role := strings.ToLower(strings.TrimSpace(c.DefaultQuery("role", c.PostForm("role"))))
+	if role == "" {
+		r.Reject(c, 100, "One of the parameters is missing or invalid: role is required")
+		return
+	}
+
+	if c.Query("user_id") == "" && c.PostForm("user_id") == "" {
+		if mID := c.DefaultQuery("member_id", c.PostForm("member_id")); mID != "" {
+			c.Request.URL.RawQuery += "&user_id=" + mID
+		}
+	}
+
+	switch role {
+	case "admin":
+		SetChatModerator(c, r)
+		return
+	case "member":
+		RemoveChatModerator(c, r)
+		return
+	}
+
+	r.Reject(c, 100, "Invalid role: must be 'admin' or 'member'")
+}
+
+func SetChatPermissions(c *gin.Context, r *core.BaseHandler) {
+	val, exists := c.Get("userID")
+	if !exists || val == nil {
+		return
+	}
+	currentUserID := val.(int64)
+
+	var peerID int64
+	if pID := c.DefaultQuery("peer_id", c.PostForm("peer_id")); pID != "" {
+		peerID, _ = strconv.ParseInt(pID, 10, 64)
+	} else if cID := c.DefaultQuery("chat_id", c.PostForm("chat_id")); cID != "" {
+		id, _ := strconv.ParseInt(cID, 10, 64)
+		peerID = 2000000000 + id
+	}
+
+	if peerID <= 2000000000 {
+		r.Reject(c, 100, "One of the parameters is missing or invalid: peer_id must be a group chat (> 2000000000)")
+		return
+	}
+
+	internalChatID := chat.GetInternalChatID(peerID, currentUserID)
+	if !strings.HasPrefix(internalChatID, "c") {
+		r.Reject(c, 15, "Access denied: target is not a group chat")
+		return
+	}
+
+	conv, err := chat.GetConversation(nil, internalChatID)
+	if err != nil || conv == nil {
+		r.Reject(c, 917, "Chat not found")
+		return
+	}
+
+	isOwner := conv.OwnerID != nil && *conv.OwnerID == currentUserID
+	currentPerms := ParseChatPermissions(conv.Settings)
+
+	callerMember, _ := chat.GetMember(nil, internalChatID, currentUserID)
+	isCallerAdmin := isOwner || (callerMember != nil && callerMember.IsAdmin && callerMember.LeftAt == nil)
+
+	canChangePerms := isOwner || (isCallerAdmin && currentPerms.ChangeAdmins == "admin")
+	if !canChangePerms {
+		r.Reject(c, 15, "Access denied: only the chat owner or administrators can change chat permissions")
+		return
+	}
+
+	perms := currentPerms
+
+	permsParam := c.DefaultQuery("permissions", c.PostForm("permissions"))
+	if permsParam != "" {
+		var pObj ChatPermissions
+		if err := json.Unmarshal([]byte(permsParam), &pObj); err == nil {
+			if pObj.Invite != "" {
+				perms.Invite = pObj.Invite
+			}
+			if pObj.ChangeInfo != "" {
+				perms.ChangeInfo = pObj.ChangeInfo
+			}
+			if pObj.ChangePin != "" {
+				perms.ChangePin = pObj.ChangePin
+			}
+			if pObj.UseMassMentions != "" {
+				perms.UseMassMentions = pObj.UseMassMentions
+			}
+			if pObj.SeeInviteLink != "" {
+				perms.SeeInviteLink = pObj.SeeInviteLink
+			}
+			if pObj.ChangeInviteLink != "" {
+				perms.ChangeInviteLink = pObj.ChangeInviteLink
+			}
+			if pObj.Call != "" {
+				perms.Call = pObj.Call
+			}
+			if pObj.ChangeAdmins != "" {
+				perms.ChangeAdmins = pObj.ChangeAdmins
+			}
+		}
+	}
+
+	if v := c.DefaultQuery("invite", c.PostForm("invite")); v != "" {
+		perms.Invite = v
+	}
+	if v := c.DefaultQuery("change_info", c.PostForm("change_info")); v != "" {
+		perms.ChangeInfo = v
+	}
+	if v := c.DefaultQuery("change_pin", c.PostForm("change_pin")); v != "" {
+		perms.ChangePin = v
+	}
+	if v := c.DefaultQuery("use_mass_mentions", c.PostForm("use_mass_mentions")); v != "" {
+		perms.UseMassMentions = v
+	}
+	if v := c.DefaultQuery("see_invite_link", c.PostForm("see_invite_link")); v != "" {
+		perms.SeeInviteLink = v
+	}
+	if v := c.DefaultQuery("change_invite_link", c.PostForm("change_invite_link")); v != "" {
+		perms.ChangeInviteLink = v
+	} else if v := c.DefaultQuery("regenerate_link", c.PostForm("regenerate_link")); v != "" {
+		perms.ChangeInviteLink = v
+	}
+	if v := c.DefaultQuery("call", c.PostForm("call")); v != "" {
+		perms.Call = v
+	}
+	if v := c.DefaultQuery("change_admins", c.PostForm("change_admins")); v != "" {
+		perms.ChangeAdmins = v
+	}
+
+	if perms.Invite != "all" && perms.Invite != "admin" && perms.Invite != "owner" {
+		perms.Invite = "all"
+	}
+	if perms.ChangeInfo != "all" && perms.ChangeInfo != "admin" && perms.ChangeInfo != "owner" {
+		perms.ChangeInfo = "admin"
+	}
+	if perms.ChangePin != "all" && perms.ChangePin != "admin" && perms.ChangePin != "owner" {
+		perms.ChangePin = "admin"
+	}
+	if perms.UseMassMentions != "all" && perms.UseMassMentions != "admin" && perms.UseMassMentions != "owner" {
+		perms.UseMassMentions = "all"
+	}
+	if perms.SeeInviteLink != "all" && perms.SeeInviteLink != "admin" && perms.SeeInviteLink != "owner" {
+		perms.SeeInviteLink = "admin"
+	}
+	if perms.ChangeInviteLink != "all" && perms.ChangeInviteLink != "admin" && perms.ChangeInviteLink != "owner" {
+		perms.ChangeInviteLink = "owner"
+	}
+	if perms.Call != "all" && perms.Call != "admin" && perms.Call != "owner" {
+		perms.Call = "all"
+	}
+	if perms.ChangeAdmins != "owner" && perms.ChangeAdmins != "admin" {
+		perms.ChangeAdmins = "owner"
+	}
+
+	var root map[string]interface{}
+	if len(conv.Settings) > 0 {
+		_ = json.Unmarshal(conv.Settings, &root)
+	}
+	if root == nil {
+		root = make(map[string]interface{})
+	}
+	root["permissions"] = perms
+
+	newSettingsBytes, err := json.Marshal(root)
+	if err != nil {
+		r.Reject(c, 10, "Failed to serialize settings: "+err.Error())
+		return
+	}
+
+	err = db.Instance.Model(&db_models.Conversation{}).
+		Where("internal_id = ?", internalChatID).
+		Update("settings", db_models.EncryptedJSON(newSettingsBytes)).Error
+	if err != nil {
+		r.Reject(c, 10, "Internal server error: failed to update chat permissions: "+err.Error())
+		return
+	}
+
+	r.BroadcastChatSomethingChanged(c, peerID, currentUserID)
+
+	c.JSON(http.StatusOK, gin.H{
+		"response": 1,
 	})
 }

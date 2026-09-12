@@ -139,6 +139,28 @@ type DeletedMessage struct {
 	LocalID uint64 `gorm:"primaryKey"`
 }
 
+type ConversationMute struct {
+	UserID               int64     `gorm:"primaryKey;autoIncrement:false" json:"user_id"`
+	PeerID               int64     `gorm:"primaryKey;autoIncrement:false" json:"peer_id"`
+	DisabledUntil        int64     `gorm:"default:0" json:"disabled_until"` // -1 = forever, 0 = unmuted, >0 = timestamp
+	Sound                bool      `gorm:"type:tinyint(1);default:1" json:"sound"`
+	DisabledMentions     bool      `gorm:"type:tinyint(1);default:0" json:"disabled_mentions"`
+	DisabledMassMentions bool      `gorm:"type:tinyint(1);default:0" json:"disabled_mass_mentions"`
+	CreatedAt            time.Time `gorm:"precision:3" json:"created_at"`
+	UpdatedAt            time.Time `gorm:"precision:3" json:"updated_at"`
+}
+
+type MessageMention struct {
+	ID          uint64    `gorm:"primaryKey;autoIncrement" json:"id"`
+	MessageID   uint64    `gorm:"index:idx_mention_msg" json:"message_id"`
+	ChatID      string    `gorm:"index:idx_mention_chat;type:varchar(100)" json:"chat_id"`
+	PeerID      int64     `gorm:"index:idx_mention_peer" json:"peer_id"`
+	FromID      int64     `json:"from_id"`
+	UserID      int64     `gorm:"index:idx_mention_user" json:"user_id"` // 0 = all, -1 = online, >0 = specific user
+	MentionType string    `gorm:"type:varchar(20)" json:"mention_type"`  // "user", "all", "online"
+	CreatedAt   time.Time `gorm:"precision:3" json:"created_at"`
+}
+
 // BuildVisibilityFilter applies visibility filters to a gorm query for messages.
 // It filters out:
 // 1. Messages globally deleted (deleted_at IS NOT NULL)

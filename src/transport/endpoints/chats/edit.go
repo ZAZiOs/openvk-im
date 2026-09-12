@@ -43,16 +43,30 @@ func EditChat(c *gin.Context, r *core.BaseHandler) {
 		return
 	}
 
-	var check db_models.ConversationMember
+	var conv db_models.Conversation
+	if err := db.Instance.Where("internal_id = ?", internalChatID).First(&conv).Error; err != nil {
+		r.Reject(c, 917, "Chat not found")
+		return
+	}
+
+	var member db_models.ConversationMember
 	err := db.Instance.Where(
-		"internal_chat_id = ? AND user_id = ? AND is_admin = ? AND left_at IS NULL",
+		"internal_chat_id = ? AND user_id = ? AND left_at IS NULL",
 		internalChatID,
 		currentUserID,
-		true,
-	).First(&check).Error
+	).First(&member).Error
 
 	if err != nil {
-		r.Reject(c, 917, "You don't have access to this chat or you are not an administrator of this chat")
+		r.Reject(c, 917, "You don't have access to this chat")
+		return
+	}
+
+	isOwner := conv.OwnerID != nil && *conv.OwnerID == currentUserID
+	isAdmin := isOwner || member.IsAdmin
+	perms := ParseChatPermissions(conv.Settings)
+
+	if !CheckPermission(perms.ChangeInfo, isOwner, isAdmin, true) {
+		r.Reject(c, 917, "You don't have permission to edit this chat's title")
 		return
 	}
 

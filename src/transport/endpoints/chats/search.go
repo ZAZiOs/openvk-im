@@ -161,7 +161,7 @@ func SearchConversations(c *gin.Context, r *core.BaseHandler) {
 
 		var msgVK interface{} = nil
 		if hasMsg {
-			msgVK = lastMsg.ToVKApiStructBatch(db.Instance, 1, currentUserID, pID, nil, nil, nil)
+			msgVK = lastMsg.ToVKApiStructBatch(db.Instance, 1, currentUserID, pID, nil, nil, nil, nil)
 		}
 
 		responseItems = append(responseItems, gin.H{

@@ -9,6 +9,7 @@ import (
 	"ovk-im/src/db"
 	db_models "ovk-im/src/models/db"
 	"ovk-im/src/repo/chat"
+	"ovk-im/src/transport/endpoints/account"
 	"ovk-im/src/transport/endpoints/core"
 
 	"github.com/gin-gonic/gin"
@@ -209,6 +210,9 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 
 	chatMembersMap := make(map[string][]int64, len(chatIDsToFetchMembers))
 	adminMap := make(map[string]int64, len(chatIDsToFetchMembers))
+	ownerMap := make(map[string]int64, len(chatIDsToFetchMembers))
+	adminIDsMap := make(map[string][]int64, len(chatIDsToFetchMembers))
+	permissionsMap := make(map[string]ChatPermissions, len(chatIDsToFetchMembers))
 
 	if len(chatIDsToFetchMembers) > 0 {
 		type ChatMember struct {
@@ -225,20 +229,24 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 			chatMembersMap[m.InternalChatID] = append(chatMembersMap[m.InternalChatID], m.UserID)
 		}
 
-		type ChatOwner struct {
+		type ChatMeta struct {
 			InternalID string
 			OwnerID    *int64
+			Settings   db_models.EncryptedJSON
 		}
-		var owners []ChatOwner
+		var metas []ChatMeta
 		db.Instance.Table("conversations").
-			Select("internal_id, owner_id").
+			Select("internal_id, owner_id, settings").
 			Where("internal_id IN ?", chatIDsToFetchMembers).
-			Find(&owners)
+			Find(&metas)
 
-		for _, o := range owners {
+		for _, o := range metas {
 			if o.OwnerID != nil {
 				adminMap[o.InternalID] = *o.OwnerID
+				ownerMap[o.InternalID] = *o.OwnerID
+				adminIDsMap[o.InternalID] = []int64{*o.OwnerID}
 			}
+			permissionsMap[o.InternalID] = ParseChatPermissions(o.Settings)
 		}
 
 		var admins []ChatMember
@@ -251,6 +259,16 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 		for _, a := range admins {
 			if _, exists := adminMap[a.InternalChatID]; !exists || adminMap[a.InternalChatID] == 0 {
 				adminMap[a.InternalChatID] = a.UserID
+			}
+			found := false
+			for _, aid := range adminIDsMap[a.InternalChatID] {
+				if aid == a.UserID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				adminIDsMap[a.InternalChatID] = append(adminIDsMap[a.InternalChatID], a.UserID)
 			}
 		}
 	}
@@ -298,7 +316,7 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 
 		var msgVK interface{} = nil
 		if hasMsg {
-			msgVK = lastMsg.ToVKApiStructBatch(db.Instance, 1, currentUserID, pID, preloadedMap, readCache, nil)
+			msgVK = lastMsg.ToVKApiStructBatch(db.Instance, 1, currentUserID, pID, preloadedMap, readCache, nil, nil)
 		}
 
 		effLastID := row.ConvLastMessageID
@@ -342,6 +360,7 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 			"out_read_cmid":                outRead,
 			"important":                    (m.Flags & 1) != 0,
 			"unanswered":                   (m.Flags & 2) != 0,
+			"push_settings":                account.FetchPushSettings(currentUserID, pID),
 			"sort_id": gin.H{
 				"major_id": majorID,
 				"minor_id": minorID,
@@ -373,7 +392,7 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 		if conv.PinnedMsgID > 0 {
 			var pMsg db_models.Message
 			if err := db.Instance.Where("chat_id = ? AND local_id = ? AND deleted_at IS NULL", m.InternalChatID, conv.PinnedMsgID).First(&pMsg).Error; err == nil {
-				pMsgVK = pMsg.ToVKApiStructBatch(db.Instance, 0, currentUserID, pID, preloadedMap, readCache, nil)
+				pMsgVK = pMsg.ToVKApiStructBatch(db.Instance, 0, currentUserID, pID, preloadedMap, readCache, nil, nil)
 			}
 		}
 
@@ -382,10 +401,32 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 			if membersList == nil {
 				membersList = []int64{}
 			}
+			ownerID := ownerMap[m.InternalChatID]
+			adminIDs := adminIDsMap[m.InternalChatID]
+			if adminIDs == nil {
+				adminIDs = []int64{}
+			}
+			perms := permissionsMap[m.InternalChatID]
+			isOwner := (ownerID > 0 && currentUserID == ownerID)
+			isAdmin := isOwner
+			if !isAdmin {
+				for _, aid := range adminIDs {
+					if aid == currentUserID {
+						isAdmin = true
+						break
+					}
+				}
+			}
+			isMember := stateStr == "in"
+
 			chatSettingsObj := gin.H{
-				"members":  membersList,
-				"admin_id": adminMap[m.InternalChatID],
-				"state":    stateStr,
+				"members":       membersList,
+				"admin_id":      adminMap[m.InternalChatID],
+				"owner_id":      ownerID,
+				"admin_ids":     adminIDs,
+				"permissions":   perms.ToGinH(),
+				"acl":           ComputeChatACL(perms, isOwner, isAdmin, isMember),
+				"state":         stateStr,
 			}
 			if pMsgVK != nil {
 				chatSettingsObj["pinned_message"] = pMsgVK
@@ -592,6 +633,10 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 
 	chatMembersMap := make(map[string][]int64)
 	adminMap := make(map[string]int64, len(chatIDsToFetchMembers))
+	ownerMap := make(map[string]int64, len(chatIDsToFetchMembers))
+	adminIDsMap := make(map[string][]int64, len(chatIDsToFetchMembers))
+	permissionsMap := make(map[string]ChatPermissions, len(chatIDsToFetchMembers))
+
 	if len(chatIDsToFetchMembers) > 0 {
 		type ChatMember struct {
 			InternalChatID string
@@ -607,20 +652,24 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 			chatMembersMap[m.InternalChatID] = append(chatMembersMap[m.InternalChatID], m.UserID)
 		}
 
-		type ChatOwner struct {
+		type ChatMeta struct {
 			InternalID string
 			OwnerID    *int64
+			Settings   db_models.EncryptedJSON
 		}
-		var owners []ChatOwner
+		var metas []ChatMeta
 		db.Instance.Table("conversations").
-			Select("internal_id, owner_id").
+			Select("internal_id, owner_id, settings").
 			Where("internal_id IN ?", chatIDsToFetchMembers).
-			Find(&owners)
+			Find(&metas)
 
-		for _, o := range owners {
+		for _, o := range metas {
 			if o.OwnerID != nil {
 				adminMap[o.InternalID] = *o.OwnerID
+				ownerMap[o.InternalID] = *o.OwnerID
+				adminIDsMap[o.InternalID] = []int64{*o.OwnerID}
 			}
+			permissionsMap[o.InternalID] = ParseChatPermissions(o.Settings)
 		}
 
 		var admins []ChatMember
@@ -633,6 +682,16 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 		for _, a := range admins {
 			if _, exists := adminMap[a.InternalChatID]; !exists || adminMap[a.InternalChatID] == 0 {
 				adminMap[a.InternalChatID] = a.UserID
+			}
+			found := false
+			for _, aid := range adminIDsMap[a.InternalChatID] {
+				if aid == a.UserID {
+					found = true
+					break
+				}
+			}
+			if !found {
+				adminIDsMap[a.InternalChatID] = append(adminIDsMap[a.InternalChatID], a.UserID)
 			}
 		}
 	}
@@ -729,7 +788,7 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 
 		var msgVK interface{} = nil
 		if hasMsg {
-			msgVK = lastMsg.ToVKApiStructBatch(db.Instance, 1, currentUserID, pID, preloadedMap, readCache, nil)
+			msgVK = lastMsg.ToVKApiStructBatch(db.Instance, 1, currentUserID, pID, preloadedMap, readCache, nil, nil)
 		}
 
 		effLastID := m.Conversation.LastMessageID
@@ -779,6 +838,7 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 			"unread_count":                 uCount,
 			"important":                    (m.Flags & 1) != 0,
 			"unanswered":                   (m.Flags & 2) != 0,
+			"push_settings":                account.FetchPushSettings(currentUserID, pID),
 			"sort_id": gin.H{
 				"major_id": majorID,
 				"minor_id": minorID,
@@ -793,7 +853,7 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 		if conv.PinnedMsgID > 0 {
 			var pMsg db_models.Message
 			if err := db.Instance.Where("chat_id = ? AND local_id = ? AND deleted_at IS NULL", m.InternalChatID, conv.PinnedMsgID).First(&pMsg).Error; err == nil {
-				pMsgVK = pMsg.ToVKApiStructBatch(db.Instance, 0, currentUserID, pID, preloadedMap, readCache, nil)
+				pMsgVK = pMsg.ToVKApiStructBatch(db.Instance, 0, currentUserID, pID, preloadedMap, readCache, nil, nil)
 			}
 		}
 
@@ -819,10 +879,32 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 			if membersList == nil {
 				membersList = []int64{}
 			}
+			ownerID := ownerMap[m.InternalChatID]
+			adminIDs := adminIDsMap[m.InternalChatID]
+			if adminIDs == nil {
+				adminIDs = []int64{}
+			}
+			perms := permissionsMap[m.InternalChatID]
+			isOwner := (ownerID > 0 && currentUserID == ownerID)
+			isAdmin := isOwner
+			if !isAdmin {
+				for _, aid := range adminIDs {
+					if aid == currentUserID {
+						isAdmin = true
+						break
+					}
+				}
+			}
+			isMember := stateStr == "in"
+
 			chatSettingsObj := gin.H{
-				"members":  membersList,
-				"admin_id": adminMap[m.InternalChatID],
-				"state":    stateStr,
+				"members":       membersList,
+				"admin_id":      adminMap[m.InternalChatID],
+				"owner_id":      ownerID,
+				"admin_ids":     adminIDs,
+				"permissions":   perms.ToGinH(),
+				"acl":           ComputeChatACL(perms, isOwner, isAdmin, isMember),
+				"state":         stateStr,
 			}
 			if pMsgVK != nil {
 				chatSettingsObj["pinned_message"] = pMsgVK
@@ -905,9 +987,41 @@ func GetConversationMembers(c *gin.Context, r *core.BaseHandler) {
 
 	if peerID > 2000000000 || strings.HasPrefix(internalChatId, "c") {
 		var conv db_models.Conversation
-		db.Instance.Select("owner_id").Where("internal_id = ?", internalChatId).First(&conv)
+		db.Instance.Select("owner_id, settings").Where("internal_id = ?", internalChatId).First(&conv)
+		perms := ParseChatPermissions(conv.Settings)
+
+		var ownerID int64
+		if conv.OwnerID != nil {
+			ownerID = *conv.OwnerID
+		}
 
 		db.Instance.Where("internal_chat_id = ? AND left_at IS NULL", internalChatId).Find(&members)
+
+		var adminIDs []int64
+		if ownerID > 0 {
+			adminIDs = append(adminIDs, ownerID)
+		}
+
+		var isCallerOwner = (ownerID > 0 && currentUserID == ownerID)
+		var isCallerAdmin = isCallerOwner
+
+		for _, m := range members {
+			if m.IsAdmin {
+				found := false
+				for _, aid := range adminIDs {
+					if aid == m.UserID {
+						found = true
+						break
+					}
+				}
+				if !found {
+					adminIDs = append(adminIDs, m.UserID)
+				}
+			}
+			if m.UserID == currentUserID && m.IsAdmin {
+				isCallerAdmin = true
+			}
+		}
 
 		for _, m := range members {
 			item := gin.H{
@@ -915,7 +1029,18 @@ func GetConversationMembers(c *gin.Context, r *core.BaseHandler) {
 				"invited_by": m.InvitedBy,
 				"join_date": m.JoinedAt.Unix(),
 			}
-			isOwner := conv.OwnerID != nil && m.UserID == *conv.OwnerID
+			isOwner := (ownerID > 0 && m.UserID == ownerID)
+			isAdmin := isOwner || m.IsAdmin
+
+			canKick := false
+			if m.UserID != currentUserID {
+				if isCallerOwner {
+					canKick = true
+				} else if isCallerAdmin {
+					canKick = !isAdmin
+				}
+			}
+
 			if isOwner {
 				item["is_admin"] = true
 				item["is_owner"] = true
@@ -923,6 +1048,8 @@ func GetConversationMembers(c *gin.Context, r *core.BaseHandler) {
 				item["is_admin"] = true
 				item["is_moderator"] = true
 			}
+			item["can_kick"] = canKick
+
 			items = append(items, item)
 
 			if extended {
@@ -930,6 +1057,29 @@ func GetConversationMembers(c *gin.Context, r *core.BaseHandler) {
 				addID(m.InvitedBy, &userIDs, &groupIDs, &chatIDs)
 			}
 		}
+
+		result := gin.H{
+			"count": len(items),
+			"items": items,
+			"chat_settings": gin.H{
+				"owner_id":      ownerID,
+				"admin_id":      ownerID,
+				"admin_ids":     adminIDs,
+				"permissions":   perms.ToGinH(),
+				"acl":           ComputeChatACL(perms, isCallerOwner, isCallerAdmin, true),
+				"members_count": len(members),
+				"state":         "in",
+			},
+		}
+
+		if extended {
+			result["profiles"] = uniqueIDs(userIDs)
+			result["groups"] = uniqueIDs(groupIDs)
+			result["chats"] = uniqueIDs(chatIDs)
+		}
+
+		c.JSON(http.StatusOK, gin.H{"response": result})
+		return
 	} else {
 		participants := []int64{currentUserID, peerID}
 		for _, p := range participants {
@@ -1118,9 +1268,7 @@ func GetChat(c *gin.Context, r *core.BaseHandler) {
 			AdminID:      adminID,
 			Users:        userIDs,
 			MembersCount: len(userIDs),
-			PushSettings: &db_models.VKPushSettings{
-				DisabledUntil: 0,
-			},
+			PushSettings: account.FetchPushSettings(currentUserID, 2000000000+localChatID),
 		}
 
 		if leftState > 0 {
