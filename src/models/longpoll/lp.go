@@ -56,16 +56,17 @@ type VKApiMessagesWithCount struct {
 // Attachments
 
 type LPAttachments struct {
-	Items   []LPAttachmentItem
-	Source  string
-	Mid     string
-	Emoji   bool
-	From    int64
-	ReplyTo uint64
-	Fwd     string
-	CMID    uint64
-	Mention bool
-	Muted   bool
+	Items        []LPAttachmentItem
+	ItemsPayload []interface{}
+	Source       string
+	Mid          string
+	Emoji        bool
+	From         int64
+	ReplyTo      uint64
+	Fwd          string
+	CMID         uint64
+	Mention      bool
+	Muted        bool
 }
 type LPAttachmentItem struct {
 	Type string
@@ -373,6 +374,9 @@ func (e NewMessageEvent) ToSlice(cfg LPConfig) interface{} {
 			}
 			if peerID > 2000000000 {
 				msgObj["chat_id"] = peerID - 2000000000
+			}
+			if e.Attachments != nil && len(e.Attachments.ItemsPayload) > 0 {
+				msgObj["attachments"] = e.Attachments.ItemsPayload
 			}
 			return []interface{}{
 				101,

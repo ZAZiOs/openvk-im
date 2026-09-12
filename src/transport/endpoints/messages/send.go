@@ -318,6 +318,8 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 		}
 	}
 
+	attachmentsJSON := r.Get(c, "attachments_json")
+
 	peerIDsRaw := r.Get(c, "peer_ids")
 	if peerIDsRaw != "" {
 		pIDStrs := strings.Split(peerIDsRaw, ",")
@@ -334,7 +336,7 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 			}
 
 			randID := rand.Int63()
-			mID, cmID, errCode, errMsg := executeSendMessage(c.Request.Context(), r, pID, senderID, message, attachment, replyToStr, forwardMessagesRaw, randID)
+			mID, cmID, errCode, errMsg := executeSendMessage(c.Request.Context(), r, pID, senderID, message, attachment, replyToStr, forwardMessagesRaw, randID, attachmentsJSON)
 			if errCode != 0 {
 				results = append(results, MultiPeerResponse{
 					PeerID: pID,
@@ -370,7 +372,7 @@ func Send(c *gin.Context, r *core.BaseHandler) {
 		randomID = rand.Int63()
 	}
 
-	finalMessageID, _, errCode, errMsg := executeSendMessage(c.Request.Context(), r, peerID, senderID, message, attachment, replyToStr, forwardMessagesRaw, randomID)
+	finalMessageID, _, errCode, errMsg := executeSendMessage(c.Request.Context(), r, peerID, senderID, message, attachment, replyToStr, forwardMessagesRaw, randomID, attachmentsJSON)
 	if errCode != 0 {
 		r.Reject(c, errCode, errMsg)
 		return
@@ -389,6 +391,7 @@ func executeSendMessage(
 	replyToStr string,
 	forwardMessagesRaw string,
 	randomID int64,
+	attachmentsJSON string,
 ) (mID uint64, cmID uint64, errCode int, errMsg string) {
 	internalChatID := chat.GetInternalChatID(peerID, senderID)
 	isGroupChat := strings.HasPrefix(internalChatID, "c")
@@ -605,6 +608,12 @@ func executeSendMessage(
 	}
 	if forwardMessagesRaw != "" {
 		lpAttach.Fwd = forwardMessagesRaw
+	}
+	if attachmentsJSON != "" {
+		var rawItems []interface{}
+		if err := json.Unmarshal([]byte(attachmentsJSON), &rawItems); err == nil {
+			lpAttach.ItemsPayload = rawItems
+		}
 	}
 
 	lpEvent := lp_models.NewMessageEvent{
