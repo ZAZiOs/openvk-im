@@ -350,12 +350,15 @@ func GetConversations(c *gin.Context, r *core.BaseHandler) {
 			}
 		}
 
+		inReadID := chat.ResolveGlobalMsgID(db.Instance, m.InternalChatID, m.LastReadID, lastCMID, lastMsgID)
+		outReadID := chat.ResolveGlobalMsgID(db.Instance, m.InternalChatID, outRead, lastCMID, lastMsgID)
+
 		conversationObj := gin.H{
 			"peer":                         gin.H{"id": pID, "type": getPeerType(m.InternalChatID)},
 			"last_message_id":              lastMsgID,
 			"last_conversation_message_id": lastCMID,
-			"in_read":                      m.LastReadID,
-			"out_read":                     outRead,
+			"in_read":                      inReadID,
+			"out_read":                     outReadID,
 			"in_read_cmid":                 m.LastReadID,
 			"out_read_cmid":                outRead,
 			"important":                    (m.Flags & 1) != 0,
@@ -786,11 +789,6 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 		pID := chat.DerivePeerID(m.InternalChatID, currentUserID)
 		lastMsg, hasMsg := msgMap[m.InternalChatID]
 
-		var msgVK interface{} = nil
-		if hasMsg {
-			msgVK = lastMsg.ToVKApiStructBatch(db.Instance, 1, currentUserID, pID, preloadedMap, readCache, nil, nil)
-		}
-
 		effLastID := m.Conversation.LastMessageID
 		if effLastID == 0 {
 			effLastID = m.LastMessageID
@@ -827,12 +825,15 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 			uCount = uc
 		}
 
+		inReadID := chat.ResolveGlobalMsgID(db.Instance, m.InternalChatID, m.LastReadID, lastCMID, lastMsgID)
+		outReadID := chat.ResolveGlobalMsgID(db.Instance, m.InternalChatID, outRead, lastCMID, lastMsgID)
+
 		convObj := gin.H{
 			"peer":                         gin.H{"id": pID, "type": getPeerType(m.InternalChatID)},
 			"last_message_id":              lastMsgID,
 			"last_conversation_message_id": lastCMID,
-			"in_read":                      m.LastReadID,
-			"out_read":                     outRead,
+			"in_read":                      inReadID,
+			"out_read":                     outReadID,
 			"in_read_cmid":                 m.LastReadID,
 			"out_read_cmid":                outRead,
 			"unread_count":                 uCount,
@@ -914,10 +915,7 @@ func GetConversationsById(c *gin.Context, r *core.BaseHandler) {
 			convObj["pinned_message"] = pMsgVK
 		}
 
-		responseItems = append(responseItems, gin.H{
-			"conversation": convObj,
-			"last_message": msgVK,
-		})
+		responseItems = append(responseItems, convObj)
 
 		if extended {
 			addID(pID, &userIDs, &groupIDs, &chatIDs)

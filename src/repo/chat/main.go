@@ -509,3 +509,28 @@ func RefreshChatLastMessage(tx *gorm.DB, internalChatID string) error {
 		Where("internal_chat_id = ?", internalChatID).
 		Update("last_message_id", newLastID).Error
 }
+
+func ResolveGlobalMsgID(tx *gorm.DB, chatID string, localID uint64, lastCMID uint64, lastMsgID uint64) uint64 {
+	if localID == 0 {
+		return 0
+	}
+	if lastCMID > 0 && localID >= lastCMID && lastMsgID > 0 {
+		return lastMsgID
+	}
+	var msgID uint64
+	dbRef := tx
+	if dbRef == nil {
+		dbRef = dbx.Instance
+	}
+	if dbRef != nil {
+		dbRef.Table("messages").Select("id").Where("chat_id = ? AND local_id = ?", chatID, localID).Scan(&msgID)
+		if msgID == 0 {
+			dbRef.Table("messages").Select("id").Where("chat_id = ? AND local_id <= ?", chatID, localID).Order("local_id DESC").Limit(1).Scan(&msgID)
+		}
+	}
+	if msgID == 0 {
+		return localID
+	}
+	return msgID
+}
+

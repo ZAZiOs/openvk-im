@@ -146,12 +146,24 @@ func SearchConversations(c *gin.Context, r *core.BaseHandler) {
 			}
 		}
 
+		var lastMsgID uint64 = 0
+		var lastCMID uint64 = m.LastMessageID
+		if hasMsg {
+			lastMsgID = lastMsg.ID
+			lastCMID = lastMsg.LocalID
+		}
+		inReadID := chat.ResolveGlobalMsgID(db.Instance, m.InternalChatID, m.LastReadID, lastCMID, lastMsgID)
+		outReadID := chat.ResolveGlobalMsgID(db.Instance, m.InternalChatID, m.LastMessageID, lastCMID, lastMsgID)
+
 		convObj := gin.H{
-			"peer":            gin.H{"id": pID, "type": getPeerType(m.InternalChatID)},
-			"last_message_id": m.LastMessageID,
-			"in_read":         m.LastReadID,
-			"out_read":        m.LastMessageID,
-			"can_write":       canWriteObj,
+			"peer":                         gin.H{"id": pID, "type": getPeerType(m.InternalChatID)},
+			"last_message_id":              lastMsgID,
+			"last_conversation_message_id": lastCMID,
+			"in_read":                      inReadID,
+			"out_read":                     outReadID,
+			"in_read_cmid":                 m.LastReadID,
+			"out_read_cmid":                m.LastMessageID,
+			"can_write":                    canWriteObj,
 		}
 		if getPeerType(m.InternalChatID) == "chat" {
 			convObj["chat_settings"] = gin.H{

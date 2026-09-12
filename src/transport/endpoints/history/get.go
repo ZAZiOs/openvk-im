@@ -253,6 +253,71 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 		if isGroupChat && len(chatIDs) > 0 {
 			response["chats"] = uniqueIDs(chatIDs)
 		}
+
+		if !apiV.IsOlderThan(5, 80) {
+			convs := make([]gin.H, 0)
+			if member != nil {
+				var lastMsgID uint64 = 0
+				var lastCMID uint64 = 0
+				if len(msgs) > 0 {
+					lastMsgID = msgs[0].ID
+					lastCMID = msgs[0].LocalID
+				}
+				var outRead uint64 = 0
+				if states, ok := readCache[chatID]; ok {
+					for _, st := range states {
+						if st.UserID != currentUserID && st.LastReadID > outRead {
+							outRead = st.LastReadID
+						}
+					}
+				}
+				if outRead == 0 && strings.HasPrefix(chatID, "dm") {
+					parts := strings.Split(chatID[2:], "_")
+					if len(parts) == 2 && parts[0] == parts[1] {
+						outRead = member.LastReadID
+					}
+				}
+
+				pType := "user"
+				if isGroupChat {
+					pType = "chat"
+				} else if peerID < 0 {
+					pType = "group"
+				}
+
+				inReadID := chat.ResolveGlobalMsgID(db.Instance, chatID, member.LastReadID, lastCMID, lastMsgID)
+				outReadID := chat.ResolveGlobalMsgID(db.Instance, chatID, outRead, lastCMID, lastMsgID)
+
+				cObj := gin.H{
+					"peer": gin.H{
+						"id":   peerID,
+						"type": pType,
+					},
+					"last_message_id":              lastMsgID,
+					"last_conversation_message_id": lastCMID,
+					"in_read":                      inReadID,
+					"out_read":                     outReadID,
+					"in_read_cmid":                 member.LastReadID,
+					"out_read_cmid":                outRead,
+					"unread_count":                 unreadCount,
+					"important":                    (member.Flags & 1) != 0,
+					"unanswered":                   (member.Flags & 2) != 0,
+					"push_settings":                gin.H{"sound": 1, "disabled_until": 0},
+					"can_write":                    gin.H{"allowed": true},
+				}
+				if isGroupChat {
+					cObj["chat_settings"] = gin.H{
+						"members_count": len(chatMembers),
+						"title":         member.Conversation.Title,
+						"admin_id":      chatAdminID,
+						"state":         "in",
+						"active_ids":    chatMembers,
+					}
+				}
+				convs = append(convs, cObj)
+			}
+			response["conversations"] = convs
+		}
 	}
 
 	c.JSON(http.StatusOK, gin.H{"response": response})
