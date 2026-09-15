@@ -61,6 +61,7 @@ type ChatInvite struct {
 	UsageCount     int64      `json:"usage_count"`
 	Revoked        bool       `gorm:"default:false;index" json:"revoked"`
 	ExpiresAt      *time.Time `gorm:"precision:3" json:"expires_at"`
+	CanSeeHistory  bool       `gorm:"default:false" json:"can_see_history"`
 	CreatedAt      time.Time  `gorm:"precision:3" json:"created_at"`
 
 	Conversation Conversation `gorm:"foreignKey:InternalChatID;references:InternalID" json:"-"`

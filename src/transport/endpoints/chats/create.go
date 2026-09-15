@@ -19,25 +19,17 @@ func CreateChat(c *gin.Context, r *core.BaseHandler) {
 	title := strings.TrimSpace(c.Query("title"))
 	userIDsRaw := c.Query("user_ids")
 
-	if userIDsRaw == "" {
-		r.Reject(c, 100, "One of the parameters is missing: user_ids")
-		return
-	}
-
-	rawIDs := strings.Split(userIDsRaw, ",")
 	var userIDs []int64
-	for _, idStr := range rawIDs {
-		idStr = strings.TrimSpace(idStr)
-		if id, err := strconv.ParseInt(idStr, 10, 64); err == nil {
-			if id != currentUserID {
-				userIDs = append(userIDs, id)
+	if userIDsRaw != "" {
+		rawIDs := strings.Split(userIDsRaw, ",")
+		for _, idStr := range rawIDs {
+			idStr = strings.TrimSpace(idStr)
+			if id, err := strconv.ParseInt(idStr, 10, 64); err == nil {
+				if id != currentUserID && id > 0 {
+					userIDs = append(userIDs, id)
+				}
 			}
 		}
-	}
-
-	if len(userIDs) == 0 {
-		r.Reject(c, 100, "At least one other user_id is required")
-		return
 	}
 
 	conv, err := chat.CreateConversation(currentUserID, userIDs, title)

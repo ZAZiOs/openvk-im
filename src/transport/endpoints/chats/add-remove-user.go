@@ -50,6 +50,14 @@ func AddChatUser(c *gin.Context, r *core.BaseHandler) {
 		}
 	}
 
+	var visibleCount int64
+	if vcStr := c.Query("visible_messages_count"); vcStr != "" {
+		if vc, err := strconv.ParseInt(vcStr, 10, 64); err == nil && vc > 0 {
+			visibleCount = vc
+		}
+	}
+	canSeeHistory := visibleCount > 0
+
 	messageText := "invited user " + strconv.FormatInt(userID, 10)
 
 	msg, err := chat.AddUserToConversation(
@@ -60,6 +68,7 @@ func AddChatUser(c *gin.Context, r *core.BaseHandler) {
 		"chat_invite_user",
 		userID,
 		"",
+		canSeeHistory,
 	)
 
 	if err != nil {

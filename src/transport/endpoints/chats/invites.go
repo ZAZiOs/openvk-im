@@ -91,10 +91,30 @@ func GetInviteLink(c *gin.Context, r *core.BaseHandler) {
 			Update("revoked", true)
 	}
 
+	canSeeHistory := c.Query("can_see_history") == "1" || c.Query("can_see_messages_before") == "1" || c.Query("for_topic") == "1"
+
+	var expiresAt *time.Time
+	if lifetimeStr := c.Query("lifetime"); lifetimeStr != "" {
+		if lifetime, err := strconv.ParseInt(lifetimeStr, 10, 64); err == nil && lifetime > 0 {
+			t := time.Now().Add(time.Duration(lifetime) * time.Second)
+			expiresAt = &t
+		}
+	}
+
+	var usageLimit int64
+	if limitStr := c.Query("usage_limit"); limitStr != "" {
+		if limit, err := strconv.ParseInt(limitStr, 10, 64); err == nil && limit > 0 {
+			usageLimit = limit
+		}
+	}
+
 	var activeInvite db_models.ChatInvite
 	q := db.Instance.Where("internal_chat_id = ? AND revoked = ?", internalChatID, false)
 	q = q.Where("expires_at IS NULL OR expires_at > ?", time.Now())
 	q = q.Where("usage_limit = 0 OR usage_count < usage_limit")
+	if canSeeHistory {
+		q = q.Where("can_see_history = ?", true)
+	}
 	err = q.Order("created_at DESC").First(&activeInvite).Error
 
 	if err != nil {
@@ -103,7 +123,10 @@ func GetInviteLink(c *gin.Context, r *core.BaseHandler) {
 			Code:           code,
 			InternalChatID: internalChatID,
 			CreatorID:      currentUserID,
+			UsageLimit:     usageLimit,
 			Revoked:        false,
+			ExpiresAt:      expiresAt,
+			CanSeeHistory:  canSeeHistory,
 			CreatedAt:      time.Now(),
 		}
 		if err := db.Instance.Create(&activeInvite).Error; err != nil {
@@ -274,6 +297,7 @@ func JoinChatByInviteLink(c *gin.Context, r *core.BaseHandler) {
 		"chat_invite_user_by_link",
 		currentUserID,
 		"",
+		invite.CanSeeHistory,
 	)
 
 	if err != nil {

@@ -187,13 +187,18 @@ func CreateConversation(ownerID int64, userIDs []int64, groupTitle string) (*db_
 	return &conv, err
 }
 
-func AddUserToConversation(chatID string, userID int64, inviterID int64, text string, action string, actionMid int64, actionText string) (*db_models.Message, error) {
+func AddUserToConversation(chatID string, userID int64, inviterID int64, text string, action string, actionMid int64, actionText string, canSeeHistory ...bool) (*db_models.Message, error) {
 	if !strings.HasPrefix(chatID, "c") {
 		return nil, errors.New("cannot add user to direct message")
 	}
 
 	if actionMid == 0 {
 		actionMid = inviterID
+	}
+
+	seeHistory := false
+	if len(canSeeHistory) > 0 && canSeeHistory[0] {
+		seeHistory = true
 	}
 
 	var msg *db_models.Message
@@ -247,11 +252,16 @@ func AddUserToConversation(chatID string, userID int64, inviterID int64, text st
 			return err
 		}
 
-		// Create a new active period starting from this service message
+		startLocalID := localID
+		if seeHistory {
+			startLocalID = 1
+		}
+
+		// Create a new active period starting from this service message (or 1 if history visible)
 		newPeriod := db_models.ConversationMemberPeriod{
 			InternalChatID: chatID,
 			UserID:         userID,
-			StartLocalID:   localID,
+			StartLocalID:   startLocalID,
 			EndLocalID:     nil,
 		}
 		if err := tx.Create(&newPeriod).Error; err != nil {
