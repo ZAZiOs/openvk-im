@@ -99,6 +99,12 @@ func NextLocalID(tx *gorm.DB, chatID string, fromID int64) (uint64, error) {
 }
 
 func MarkAsRead(tx *gorm.DB, chatID string, userID int64, messageID uint64) error {
+	var conv db_models.Conversation
+	if getDB(tx).Select("last_message_id").Where("internal_id = ?", chatID).First(&conv).Error == nil && conv.LastMessageID > 0 {
+		if messageID > conv.LastMessageID {
+			messageID = conv.LastMessageID
+		}
+	}
 	return getDB(tx).Model(&db_models.ConversationMember{}).
 		Where("internal_chat_id = ? AND user_id = ?", chatID, userID).
 		Where("last_read_id < ?", messageID).

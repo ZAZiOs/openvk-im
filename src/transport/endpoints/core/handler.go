@@ -336,18 +336,32 @@ func (r *BaseHandler) BroadcastChatSomethingChanged(ctx *gin.Context, peerID int
 func (r *BaseHandler) BroadcastMarkAsRead(ctx context.Context, chatID string, userID int64, lastReadID uint64) {
 	currentPeerID := chat.DerivePeerID(chatID, userID)
 
+	// Resolve lastReadID to the last *incoming* message the user has read.
+	// If the user marked their own outgoing message (e.g. after sending it),
+	// we should not emit a false read receipt to the other party.
+	var effectiveLastReadID uint64
+	db.Instance.Table("messages").
+		Where("chat_id = ? AND local_id <= ? AND from_id != ?", chatID, lastReadID, userID).
+		Select("COALESCE(MAX(local_id), 0)").
+		Row().Scan(&effectiveLastReadID)
+
 	var unreadCount int64
 	unreadQ := db.Instance.Table("messages").
-		Where("chat_id = ? AND local_id > ? AND from_id != ?", chatID, lastReadID, userID)
+		Where("chat_id = ? AND local_id > ? AND from_id != ?", chatID, effectiveLastReadID, userID)
 	unreadQ = db_models.BuildVisibilityFilter(unreadQ, chatID, userID)
 	unreadQ.Count(&unreadCount)
 
 	r.LPRepo.PushEvent(ctx, userID, "read_income_before", lp_models.ReadIncomeBeforeEvent{
 		PeerID:  currentPeerID,
-		LocalID: lastReadID,
+		LocalID: effectiveLastReadID,
 		Count:   int(unreadCount),
 	})
 	r.Broadcaster.Notify(userID)
+
+	if effectiveLastReadID == 0 {
+		// Nothing incoming was read — no need to notify other members
+		return
+	}
 
 	go func(cID string, uID int64, lrID uint64, origPeerID int64) {
 		bgCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -391,7 +405,7 @@ func (r *BaseHandler) BroadcastMarkAsRead(ctx context.Context, chatID string, us
 			})
 			r.Broadcaster.Notify(mID)
 		}
-	}(chatID, userID, lastReadID, currentPeerID)
+	}(chatID, userID, effectiveLastReadID, currentPeerID)
 }
 
 func (r *BaseHandler) SendDeleteEvent(uid int64, chatID string, localID uint64, flags uint64, forAll bool) {

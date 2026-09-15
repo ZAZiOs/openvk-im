@@ -12,7 +12,6 @@ import (
 	"github.com/redis/go-redis/v9"
 	"gorm.io/gorm"
 
-	env "ovk-im/src/config"
 	lp_models "ovk-im/src/models/longpoll"
 	redis_repo "ovk-im/src/repo/redis"
 	"ovk-im/src/transport/broadcaster"
@@ -20,20 +19,13 @@ import (
 )
 
 func GetOnlineRecipients(ctx context.Context, db *gorm.DB, userID int64) ([]int64, error) {
-	openvkDB := env.Get("OPENVK_DB_NAME", "openvk")
-	query := fmt.Sprintf(`SELECT s1.target AS recipient_id 
-		FROM %s.subscriptions s1 
-		JOIN %s.subscriptions s2 ON s1.target = s2.follower AND s1.follower = s2.target 
-		WHERE s1.follower = ? AND s1.target != ?
-		UNION 
-		SELECT cm2.user_id AS recipient_id 
+	query := `SELECT DISTINCT cm2.user_id AS recipient_id 
 		FROM conversation_members cm1 
 		JOIN conversation_members cm2 ON cm1.internal_chat_id = cm2.internal_chat_id 
-		WHERE cm1.user_id = ? AND cm2.user_id != ? AND cm1.internal_chat_id LIKE 'u%%%%' AND cm2.left_at IS NULL`,
-		openvkDB, openvkDB)
+		WHERE cm1.user_id = ? AND cm2.user_id != ? AND cm2.left_at IS NULL`
 
 	var recipients []int64
-	err := db.WithContext(ctx).Raw(query, userID, userID, userID, userID).Scan(&recipients).Error
+	err := db.WithContext(ctx).Raw(query, userID, userID).Scan(&recipients).Error
 	return recipients, err
 }
 
@@ -206,26 +198,6 @@ func TouchOnline(c *gin.Context, r *core.BaseHandler) {
 }
 
 func StartOnlineTracker(ctx context.Context, db *gorm.DB, redisClient *redis.Client, lpRepo *redis_repo.Repo, b *broadcaster.Broadcaster) {
-	openvkDB := env.Get("OPENVK_DB_NAME", "openvk")
-	now := time.Now().Unix()
-
-	var profiles []struct {
-		ID     int64 `gorm:"column:id"`
-		Online int64 `gorm:"column:online"`
-	}
-	err := db.WithContext(ctx).Raw(fmt.Sprintf("SELECT id, online FROM %s.profiles WHERE online >= ?", openvkDB), now-300).Scan(&profiles).Error
-	if err == nil {
-		for _, p := range profiles {
-			redisClient.ZAdd(ctx, "im:online_users", redis.Z{
-				Score:  float64(p.Online),
-				Member: p.ID,
-			})
-		}
-		log.Printf("[OnlineTracker] Seeded %d online users into Redis", len(profiles))
-	} else {
-		log.Printf("[OnlineTracker] Seed query warning: %v", err)
-	}
-
 	go func() {
 		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
@@ -235,13 +207,13 @@ func StartOnlineTracker(ctx context.Context, db *gorm.DB, redisClient *redis.Cli
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				checkExpiredUsers(ctx, db, redisClient, lpRepo, b, openvkDB)
+				checkExpiredUsers(ctx, db, redisClient, lpRepo, b)
 			}
 		}
 	}()
 }
 
-func checkExpiredUsers(ctx context.Context, db *gorm.DB, redisClient *redis.Client, lpRepo *redis_repo.Repo, b *broadcaster.Broadcaster, openvkDB string) {
+func checkExpiredUsers(ctx context.Context, db *gorm.DB, redisClient *redis.Client, lpRepo *redis_repo.Repo, b *broadcaster.Broadcaster) {
 	now := time.Now().Unix()
 	expiredThreshold := now - 300
 
@@ -261,8 +233,6 @@ func checkExpiredUsers(ctx context.Context, db *gorm.DB, redisClient *redis.Clie
 
 		lastScore := int64(item.Score)
 		redisClient.ZRem(ctx, "im:online_users", item.Member)
-
-		_ = db.Exec(fmt.Sprintf("UPDATE %s.profiles SET online = ? WHERE id = ? AND online < ?", openvkDB), lastScore, uID, lastScore).Error
 
 		EmitUserOffline(ctx, db, redisClient, lpRepo, b, uID, 1, uint64(lastScore))
 	}

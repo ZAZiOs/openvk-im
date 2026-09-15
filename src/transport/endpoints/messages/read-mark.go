@@ -10,6 +10,7 @@ import (
 	db_models "ovk-im/src/models/db"
 	"ovk-im/src/repo/chat"
 	"ovk-im/src/transport/endpoints/core"
+	"ovk-im/src/transport/endpoints/status"
 
 	"github.com/gin-gonic/gin"
 )
@@ -53,7 +54,20 @@ func MarkAsRead(c *gin.Context, r *core.BaseHandler) {
 			if err := db.Instance.Select("local_id").Where("chat_id = ? AND (local_id = ? OR id = ?)", chatID, startID, startID).Order("local_id DESC").First(&msg).Error; err == nil && msg.LocalID > 0 {
 				tasks[chatID] = &markTask{maxLocalID: msg.LocalID, pID: peerID}
 			} else {
-				tasks[chatID] = &markTask{maxLocalID: startID, pID: peerID}
+				var conv db_models.Conversation
+				if db.Instance.Select("last_message_id").Where("internal_id = ?", chatID).First(&conv).Error == nil && conv.LastMessageID > 0 {
+					if startID <= conv.LastMessageID {
+						tasks[chatID] = &markTask{maxLocalID: startID, pID: peerID}
+					} else {
+						var resolvedLocalID uint64
+						db.Instance.Table("messages").Where("chat_id = ? AND id <= ?", chatID, startID).Select("COALESCE(MAX(local_id), 0)").Row().Scan(&resolvedLocalID)
+						if resolvedLocalID > 0 {
+							tasks[chatID] = &markTask{maxLocalID: resolvedLocalID, pID: peerID}
+						} else {
+							tasks[chatID] = &markTask{maxLocalID: conv.LastMessageID, pID: peerID}
+						}
+					}
+				}
 			}
 		} else {
 			var msg db_models.Message
@@ -107,6 +121,10 @@ func MarkAsRead(c *gin.Context, r *core.BaseHandler) {
 	// 1. Synchronously update database so that immediate follow-up requests see updated read state
 	for cID, task := range tasks {
 		_ = chat.MarkAsRead(db.Instance, cID, currentUserID, task.maxLocalID)
+	}
+
+	if currentUserID > 0 && r.LPRepo != nil && r.LPRepo.Client != nil {
+		status.TouchUserActivity(c.Request.Context(), db.Instance, r.LPRepo.Client, r.LPRepo, r.Broadcaster, currentUserID)
 	}
 
 	// 2. Broadcast LongPoll events
