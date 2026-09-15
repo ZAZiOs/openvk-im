@@ -46,19 +46,11 @@ func GetNearestMessageForDate(c *gin.Context, r *core.BaseHandler) {
 
 	isGroupChat := strings.HasPrefix(chatID, "c")
 
-	if currentUserID != 0 {
-		if isGroupChat {
-			member, err := chat.GetMember(db.Instance, chatID, currentUserID)
-			if err != nil || member == nil {
-				r.Reject(c, 917, "You don't have access to this chat")
-				return
-			}
-		} else {
-			member, _ := chat.GetMember(db.Instance, chatID, currentUserID)
-			if member == nil {
-				r.Reject(c, 917, "Conversation doesn't exist")
-				return
-			}
+	if currentUserID != 0 && isGroupChat {
+		member, err := chat.GetMember(db.Instance, chatID, currentUserID)
+		if err != nil || member == nil {
+			r.Reject(c, 917, "You don't have access to this chat")
+			return
 		}
 	}
 

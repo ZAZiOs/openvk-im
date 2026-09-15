@@ -56,10 +56,6 @@ func GetHistory(c *gin.Context, r *core.BaseHandler) {
 			}
 		} else {
 			member, _ = chat.GetMember(db.Instance, chatID, currentUserID)
-			if member == nil {
-				r.Reject(c, 917, "Conversation doesn't exist")
-				return
-			}
 		}
 	}
 
