@@ -550,3 +550,18 @@ func ResolveGlobalMsgID(tx *gorm.DB, chatID string, localID uint64, lastCMID uin
 	return msgID
 }
 
+func CountUnreadConversations(tx *gorm.DB, userID int64) (int64, error) {
+	if userID == 0 {
+		return 0, nil
+	}
+	var count int64
+	unreadConvQ := getDB(tx).Table("messages").
+		Joins("JOIN conversation_members ON conversation_members.internal_chat_id = messages.chat_id AND conversation_members.user_id = ? AND conversation_members.left_at IS NULL", userID).
+		Where("messages.from_id != ?", userID).
+		Where("messages.local_id > conversation_members.last_read_id").
+		Where("messages.local_id > COALESCE(conversation_members.deleted_before_id, 0)")
+	unreadConvQ = db_models.BuildVisibilityFilter(unreadConvQ, "", userID)
+	err := unreadConvQ.Select("COUNT(DISTINCT messages.chat_id)").Scan(&count).Error
+	return count, err
+}
+

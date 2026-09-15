@@ -753,7 +753,12 @@ func executeSendMessage(
 				r.Broadcaster.Notify(uid)
 				r.LPRepo.Client.Publish(bgCtx, "lp_updates", strconv.FormatInt(uid, 10))
 			}
+
+			if uid != senderID {
+				r.BroadcastCounterUpdate(bgCtx, uid)
+			}
 		}
+		r.BroadcastCounterUpdate(bgCtx, sID)
 	}(recipients, lpEvent, senderID, validMentions)
 
 	return finalMessageID, finalLocalID, 0, ""

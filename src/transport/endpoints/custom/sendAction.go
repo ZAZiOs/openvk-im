@@ -197,6 +197,7 @@ func SendAction(c *gin.Context, r *core.BaseHandler) {
 			if err == nil {
 				r.Broadcaster.Notify(uid)
 			}
+			r.BroadcastCounterUpdate(ctx, uid)
 		}
 	}(recipients, lpEvent, currentUserID)
 

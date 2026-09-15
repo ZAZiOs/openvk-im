@@ -1,6 +1,7 @@
 package messages
 
 import (
+	"context"
 	"net/http"
 	dbx "ovk-im/src/db"
 	db_models "ovk-im/src/models/db"
@@ -97,9 +98,9 @@ func Delete(c *gin.Context, r *core.BaseHandler) {
 		results[strconv.FormatUint(id, 10)] = 0
 	}
 
+	affectedChats := make(map[string]bool)
 	err = dbx.Instance.Transaction(func(tx *gorm.DB) error {
 		now := time.Now()
-		affectedChats := make(map[string]bool)
 		for _, msg := range msgs {
 			msgChatID := msg.ChatID
 			affectedChats[msgChatID] = true
@@ -145,6 +146,28 @@ func Delete(c *gin.Context, r *core.BaseHandler) {
 		r.Reject(c, 10, "Internal server error during deletion")
 		return
 	}
+
+	var chatsList []string
+	for cID := range affectedChats {
+		chatsList = append(chatsList, cID)
+	}
+
+	go func(uID int64, chats []string, forAll bool) {
+		ctx := context.Background()
+		r.BroadcastCounterUpdate(ctx, uID)
+		if forAll {
+			for _, cID := range chats {
+				members, mErr := chat.GetActiveMemberIDs(nil, cID)
+				if mErr == nil {
+					for _, mID := range members {
+						if mID != uID {
+							r.BroadcastCounterUpdate(ctx, mID)
+						}
+					}
+				}
+			}
+		}
+	}(currentUserID, chatsList, deleteAll)
 
 	c.JSON(http.StatusOK, gin.H{"response": results})
 }
@@ -220,6 +243,10 @@ func Restore(c *gin.Context, r *core.BaseHandler) {
 		r.Reject(c, 910, "Can't restore this message, maybe it doesn't exist")
 		return
 	}
+
+	go func(uID int64) {
+		r.BroadcastCounterUpdate(context.Background(), uID)
+	}(currentUserID)
 
 	c.JSON(http.StatusOK, gin.H{"response": 1})
 }

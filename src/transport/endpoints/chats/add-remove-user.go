@@ -111,6 +111,9 @@ func AddChatUser(c *gin.Context, r *core.BaseHandler) {
 				if err == nil {
 					r.Broadcaster.Notify(uID)
 				}
+				if uID != currentUserID {
+					r.BroadcastCounterUpdate(ctx, uID)
+				}
 			}
 		}(participants, baseEvent)
 	}
@@ -241,7 +244,11 @@ func RemoveChatUser(c *gin.Context, r *core.BaseHandler) {
 					if err == nil {
 						r.Broadcaster.Notify(uID)
 					}
+					if uID != currentUserID {
+						r.BroadcastCounterUpdate(ctx, uID)
+					}
 				}
+				r.BroadcastCounterUpdate(ctx, userID)
 			}(notifyList, baseEvent)
 		}
 	}

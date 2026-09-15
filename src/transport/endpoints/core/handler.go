@@ -358,6 +358,8 @@ func (r *BaseHandler) BroadcastMarkAsRead(ctx context.Context, chatID string, us
 	})
 	r.Broadcaster.Notify(userID)
 
+	r.BroadcastCounterUpdate(ctx, userID)
+
 	if effectiveLastReadID == 0 {
 		// Nothing incoming was read — no need to notify other members
 		return
@@ -753,6 +755,7 @@ func (r *BaseHandler) BackgroundDeleteChat(userID int64, peerID int64, internalC
 	tx.Commit()
 
 	r.SendChatDeleteEvent(userID, peerID)
+	r.BroadcastCounterUpdate(context.Background(), userID)
 }
 
 func (r *BaseHandler) SendChatDeleteEvent(userID int64, peerID int64) {
@@ -761,6 +764,24 @@ func (r *BaseHandler) SendChatDeleteEvent(userID int64, peerID int64) {
 	}
 	r.LPRepo.PushEvent(context.Background(), userID, "chat_delete_all", event)
 	r.Broadcaster.Notify(userID)
+}
+
+func (r *BaseHandler) BroadcastCounterUpdate(ctx context.Context, userID int64) {
+	if userID == 0 || r.LPRepo == nil {
+		return
+	}
+
+	count, err := chat.CountUnreadConversations(db.Instance, userID)
+	if err != nil {
+		return
+	}
+
+	r.LPRepo.PushEvent(ctx, userID, "counter", lp_models.CounterUpdateEvent{
+		Count: uint(count),
+	})
+	if r.Broadcaster != nil {
+		r.Broadcaster.Notify(userID)
+	}
 }
 
 func TruncateWords(text string, length int) string {

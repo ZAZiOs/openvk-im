@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"time"
 
+	"ovk-im/src/db"
+	"ovk-im/src/repo/chat"
 	"ovk-im/src/transport/endpoints/core"
 
 	"github.com/gin-gonic/gin"
@@ -46,12 +48,15 @@ func GetLongPollServer(c *gin.Context, r *core.BaseHandler) {
 		}
 	}
 
+	unreadCount, _ := chat.CountUnreadConversations(db.Instance, subjectID)
+
 	c.JSON(http.StatusOK, gin.H{
 		"response": gin.H{
-			"key":    lpKey,
-			"server": "%REPLACE_THIS%",
-			"ts":     ts,
-			"pts":    pts,
+			"key":          lpKey,
+			"server":       "%REPLACE_THIS%",
+			"ts":           ts,
+			"pts":          pts,
+			"unread_count": unreadCount,
 		},
 	})
 }
