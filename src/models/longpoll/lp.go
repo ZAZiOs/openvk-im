@@ -437,6 +437,7 @@ func (e NewMessageEvent) ToSlice(cfg LPConfig) interface{} {
 
 	titleObj := map[string]interface{}{
 		"title": " ... ",
+		"from":  extraMap["from"],
 	}
 
 	res := []interface{}{
